@@ -35,6 +35,7 @@ export class Detector {
   config: DetectorConfig;
   private latest: Frame | null = null;
   private lastSubmittedSeq = -1;
+  private lastSubmittedRecvTs = -1;
   private lastSubmitAt = 0;
   private inflight = 0;
   private timer: NodeJS.Timeout | null = null;
@@ -71,11 +72,12 @@ export class Detector {
   private pump(): void {
     if (!this.running || !this.latest) return;
     const f = this.latest;
-    if (f.header.seq === this.lastSubmittedSeq && f.recv_ts === this.lastSubmitAt) return;
+    if (f.header.seq === this.lastSubmittedSeq && f.recv_ts === this.lastSubmittedRecvTs) return; // each frame is judged once
     if (this.inflight >= this.config.maxInflight) return;
     const now = Date.now();
     if (now - this.lastSubmitAt < this.config.minIntervalMs) return;
     this.lastSubmittedSeq = f.header.seq;
+    this.lastSubmittedRecvTs = f.recv_ts;
     this.lastSubmitAt = now;
     void this.evaluate(f);
   }

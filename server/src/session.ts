@@ -100,7 +100,9 @@ export class PressSession {
   start(): void {
     this.run++;
     this.countdown = null;
-    this.lastAcceptedFrameTs = 0;
+    this.lastAcceptedFrameTs = Date.now(); // verdicts for frames captured before this run are ignored
+    this.lastVerdict = null;
+    this.lastSeenTs = 0;
     this.log(`run ${this.run} started`);
     this.phase = 'IDLE';
     this.setPhase('SEARCHING');
