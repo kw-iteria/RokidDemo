@@ -34,19 +34,31 @@
       <canvas id="ribbon" height="28"></canvas>
       <div class="legend"><i class="k open"></i>open <i class="k closed"></i>closed <i class="k partial"></i>partial <i class="k unknown"></i>not seen</div>
     </div>
+    <div class="chat">
+      <ol id="chat-log" class="chat-log"><li class="assistant hint">Say or type “start plate press workflow”. You can also ask what I see, or change the press time.</li></ol>
+      <div id="chat-thinking" class="chat-thinking" hidden>thinking…</div>
+      <form id="chat-form" class="chat-form">
+        <input id="chat-input" type="text" placeholder="Talk to the assistant…" autocomplete="off">
+        <button type="button" id="btn-mic" aria-pressed="false" title="Hold a conversation by voice">Mic</button>
+        <button type="submit" class="primary">Send</button>
+      </form>
+    </div>
   </section>
 
   <section class="glasses">
     <div class="bezel">
       <div id="hud" class="hud" data-phase="IDLE">
         <div class="reticle"><i></i><i></i><i></i><i></i></div>
-        <svg class="dial" viewBox="0 0 200 200" aria-hidden="true">
-          <circle class="track" cx="100" cy="100" r="88"></circle>
-          <circle id="dial-arc" class="arc" cx="100" cy="100" r="88"></circle>
-        </svg>
-        <div class="center">
+        <div class="corner">
+          <svg class="dial" viewBox="0 0 200 200" aria-hidden="true">
+            <circle class="track" cx="100" cy="100" r="88"></circle>
+            <circle id="dial-arc" class="arc" cx="100" cy="100" r="88"></circle>
+          </svg>
           <div id="hud-number" class="number"></div>
           <div id="hud-check" class="check"><svg viewBox="0 0 64 64"><path d="M14 34 L27 47 L50 20"/></svg></div>
+        </div>
+        <div class="subtitle">
+          <div id="hud-chat" class="hud-chat" hidden></div>
           <div id="hud-message" class="message">Ready</div>
           <div id="hud-sub" class="sub"></div>
         </div>
@@ -83,13 +95,21 @@
     </label>
   </div>
   <div class="row actions">
-    <button id="btn-restart" class="primary">Restart run</button>
+    <button id="btn-start" class="primary">Start workflow</button>
+    <button id="btn-stop">Stop</button>
     <button id="btn-replay">Replay demo clip</button>
     <button id="btn-webcam">Use this computer's camera</button>
     <button id="btn-sound" aria-pressed="true">Sound on</button>
     <button id="btn-voice" aria-pressed="false">Voice off</button>
     <button id="btn-prompt">Edit prompt</button>
     <span id="hosts" class="hosts"></span>
+  </div>
+  <div class="row refs">
+    <span class="muted">Reference photos of the press (what "open" and "closed" look like):</span>
+    <figure><img id="ref-open" src="/refs/open.jpg" alt="reference: open"><figcaption>open</figcaption></figure>
+    <figure><img id="ref-closed" src="/refs/closed.jpg" alt="reference: closed"><figcaption>closed</figcaption></figure>
+    <button id="btn-ref-open">Capture open from live view</button>
+    <button id="btn-ref-closed">Capture closed from live view</button>
   </div>
   <div id="prompt-box" class="prompt-box" hidden>
     <textarea id="prompt" rows="8" spellcheck="false"></textarea>

@@ -34,11 +34,11 @@ export interface ClassifyResult {
 }
 
 export const DEFAULT_PROMPT = `You are the vision checker for a lab workflow, looking through the wearer's smart-glasses camera.
-The object of interest is the PLATE PRESS. In this demo it is represented by a white / light-gray folding box with a hinged lid (a glasses case) sitting on a dark table.
-Report the state of the press in this single frame:
-- press_visible: true if the press is in view (even partially, even with a hand on it).
-- lid: "open" when the lid is raised / standing up so the inside of the box is visible; "closed" when the lid is fully down and the box is a flat closed rectangle; "partial" when the lid is in between (being moved); "unknown" when the press is not visible.
-- confidence: 0 to 1.
+The PLATE PRESS in this demo is ONE specific object: a small rectangular silver / light-gray glass box with a hinged lid, about the size of a glasses case, usually lying on a dark table. Reference photos of this exact box (open and closed) are provided before the live frame.
+Rules:
+- press_visible is true ONLY when this specific box is clearly in the live frame. Hands, phones, laptops, keyboards, papers, cups, bottles, other boxes, cases, containers, furniture, walls or an empty table are NOT the press: then press_visible is false and lid is "unknown".
+- lid: "open" when the lid is raised so the inside of the box is visible; "closed" when the lid is fully down and the box is one flat closed block; "partial" while the lid is being moved or is half way; "unknown" when the press is not visible.
+- confidence (0 to 1) is how sure you are of BOTH press_visible and lid. Use 0.4 or less whenever you are guessing.
 Answer with the JSON object only.`;
 
 const JSON_SCHEMA = {
@@ -252,7 +252,7 @@ async function classifyRealtime(model: string, jpeg: Buffer, opts: ClassifyOptio
   if (!session) { session = new RealtimeSession(model, key); realtimeSessions.set(model, session); }
   const t0 = performance.now();
   try {
-    const a = await session.ask(jpeg, opts.prompt ?? DEFAULT_PROMPT, 'Report the state of the press in this frame as the JSON object.', { timeoutMs: opts.timeoutMs ?? 8000, signal: opts.signal });
+    const a = await session.ask(jpeg, opts.prompt ?? DEFAULT_PROMPT, 'Now the LIVE frame. Report the state of the press as the JSON object.', { timeoutMs: opts.timeoutMs ?? 8000, signal: opts.signal, refs: opts.refs });
     try {
       return { model, provider: 'openai-realtime', verdict: parseVerdict(a.text), latency_ms: a.latency_ms, raw: a.text, usage: a.usage };
     } catch (e) {

@@ -16,5 +16,6 @@ echo "built $APK"
 "$ADB" devices
 "$ADB" install -r "$APK"
 "$ADB" shell pm grant com.iteria.platepress android.permission.CAMERA || true
+"$ADB" shell pm grant com.iteria.platepress android.permission.RECORD_AUDIO || true
 "$ADB" shell am start -n com.iteria.platepress/.MainActivity
 echo "PlatePress launched on the glasses. Start the server with: npm start"

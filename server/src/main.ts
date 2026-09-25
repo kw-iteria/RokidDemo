@@ -12,12 +12,14 @@ import { Detector } from './detector.ts';
 import { startReplay } from './replay.ts';
 import { startBeacon, lanAddresses } from './beacon.ts';
 import { CANDIDATE_MODELS, DEFAULT_PROMPT } from './vision.ts';
+import { Agent, transcribePcm16, type ChatMessage } from './agent.ts';
 
 loadEnv();
 const ROOT = resolve(import.meta.dirname, '..', '..');
 const WEB = resolve(ROOT, 'server', 'web');
 const PORT = Number(process.env.PORT ?? 8787);
 const CONFIG_FILE = resolve(ROOT, 'config.local.json');
+const REFS_DIR = resolve(ROOT, 'server', 'refs');
 
 interface AppConfig {
   models: string[];
@@ -46,8 +48,16 @@ function persist(): void {
 }
 
 // ----------------------------------------------------------------------------- core
+function loadRefs(): { label: string; jpeg: Buffer }[] {
+  const out: { label: string; jpeg: Buffer }[] = [];
+  for (const [file, label] of [['open.jpg', 'the plate press OPEN (lid raised, inside visible)'], ['closed.jpg', 'the plate press CLOSED (lid down, flat block)']] as const) {
+    const f = resolve(REFS_DIR, file);
+    if (existsSync(f)) out.push({ label, jpeg: readFileSync(f) });
+  }
+  return out;
+}
 const session = new PressSession(config.params);
-const detector = new Detector({ models: config.models, maxInflight: config.maxInflight, minIntervalMs: config.minIntervalMs, prompt: config.prompt, timeoutMs: config.timeoutMs });
+const detector = new Detector({ models: config.models, maxInflight: config.maxInflight, minIntervalMs: config.minIntervalMs, prompt: config.prompt, timeoutMs: config.timeoutMs, refs: loadRefs() });
 
 interface Source { id: string; kind: 'glasses' | 'webcam' | 'replay'; ws?: WebSocket; lastFrameAt: number; frames: number[]; seq: number; info?: unknown }
 const sources = new Map<string, Source>();
@@ -87,8 +97,7 @@ function onFrame(source: Source, frame: Frame): void {
   if (activeSourceId() !== source.id) return;
   frame.header.src = source.id;
   latestFrame = frame;
-  if (session.phase === 'IDLE') session.start();
-  detector.offer(frame);
+  if (session.phase !== 'IDLE') detector.offer(frame); // standby: frames flow to the dashboards, no model calls
   // Relay a live preview to the dashboards (throttled, drop when a client is congested).
   const now = Date.now();
   if (now - lastRelayAt >= 70) {
@@ -104,7 +113,7 @@ detector.onVerdict = (v) => {
 };
 detector.onError = (model, err) => log('warn', `model error (${model}): ${err.slice(0, 200)}`);
 session.onChange((snap, changed) => { if (changed) { log('info', `phase → ${snap.phase}`); broadcastState(); } });
-setInterval(() => { if (session.phase !== 'IDLE' && !activeSourceId()) session.idle(); session.tick(); }, 100);
+setInterval(() => { if (session.phase !== 'IDLE' && !activeSourceId()) session.idle('camera lost'); session.tick(); }, 100);
 setInterval(() => broadcastState(), 500);
 detector.start();
 
@@ -117,6 +126,7 @@ function stateMessage(): string {
     stats: detector.stats(),
     config: { models: config.models, maxInflight: config.maxInflight, minIntervalMs: config.minIntervalMs, timeoutMs: config.timeoutMs, source: config.source, params: config.params },
     sources: [...sources.values()].map((s) => ({ id: s.id, kind: s.kind, fps: sourceFps(s), alive: now - s.lastFrameAt < 2500, active: activeSourceId() === s.id, info: s.info ?? null })),
+    camera: { live: Boolean(activeSourceId()), source: activeSourceId() },
     hosts: lanAddresses(),
     port: PORT,
   });
@@ -143,10 +153,72 @@ function startReplaySource(loop: boolean, fps = 6): void {
 }
 function stopReplaySource(): void { if (replay) { replay.stop(); replay = null; sources.delete('replay'); } }
 
+// ----------------------------------------------------------------------------- chat agent
+function startWorkflow(): string {
+  if (!activeSourceId()) { session.start(); return 'workflow started, but no camera is live yet (start the glasses app or a camera in the console)'; }
+  session.start();
+  return 'workflow started: looking for the press';
+}
+const agent = new Agent(process.env.CHAT_MODEL ?? 'gpt-5.4-mini', () => {
+  const src = activeSourceId();
+  const srcObj = src ? sources.get(src) : undefined;
+  return {
+    state: session.snapshot(),
+    camera: { live: Boolean(src), source: src, fps: srcObj ? sourceFps(srcObj) : 0 },
+    config: { models: config.models, countdown_ms: config.params.countdown_ms, confirmations: config.params.confirmations },
+    stats: { p50_ms: detector.stats().p50_ms, decisions_per_s: detector.stats().decisions_per_s },
+    frame: latestFrame && Date.now() - latestFrame.recv_ts < 5000 ? latestFrame.jpeg : null,
+  };
+}, {
+  start_workflow: startWorkflow,
+  stop_workflow: () => { session.idle('stopped by chat'); return 'workflow stopped, standing by'; },
+  set_press_time: (seconds) => { if (!(seconds > 0 && seconds <= 3600)) return 'invalid seconds'; applyCommand({ cmd: 'set', config: { params: { countdown_ms: Math.round(seconds * 1000) } } }, 'chat'); return `press time set to ${seconds} s`; },
+  set_confirmations: (n) => { applyCommand({ cmd: 'set', config: { params: { confirmations: Math.max(1, Math.min(5, Math.round(n))) } } }, 'chat'); return `confirmations set to ${config.params.confirmations}`; },
+  set_models: (models) => { const ok = models.filter((m) => typeof m === 'string' && m.trim()); if (!ok.length) return 'no models given'; applyCommand({ cmd: 'set', config: { models: ok } }, 'chat'); return `models set to ${config.models.join(' + ')}`; },
+  set_reference: (kind) => { if (!latestFrame) return 'no live frame to capture'; applyCommand({ cmd: 'set_reference', kind }, 'chat'); return `saved the current frame as the "${kind}" reference`; },
+});
+let chatBusy = false;
+async function handleChat(text: string, from: string): Promise<void> {
+  const clean = text.trim();
+  if (!clean) return;
+  const user: ChatMessage = { id: `u${Date.now()}`, role: 'user', text: clean, at: Date.now(), from };
+  broadcast(JSON.stringify({ t: 'chat', ...user }));
+  if (chatBusy) { broadcast(JSON.stringify({ t: 'chat', id: `a${Date.now()}`, role: 'assistant', text: 'One moment, still answering the previous message.', at: Date.now() })); return; }
+  chatBusy = true;
+  broadcast(JSON.stringify({ t: 'chat.thinking', on: true }));
+  try {
+    const reply = await agent.chat(clean, from, (e) => log('info', `agent tool ${e.name}: ${e.result}`));
+    broadcast(JSON.stringify({ t: 'chat', ...reply }));
+    log('info', `chat (${from}): "${clean.slice(0, 80)}" → "${reply.text.slice(0, 100)}"`);
+  } catch (e) {
+    const msg = (e as Error).message;
+    log('error', `chat failed: ${msg}`);
+    broadcast(JSON.stringify({ t: 'chat', id: `a${Date.now()}`, role: 'assistant', text: `Sorry, the assistant failed: ${msg.slice(0, 120)}`, at: Date.now() }));
+  } finally {
+    chatBusy = false;
+    broadcast(JSON.stringify({ t: 'chat.thinking', on: false }));
+    broadcastState();
+  }
+}
+async function handleAudio(pcm: Buffer, from: string, sampleRate = 16000): Promise<void> {
+  broadcast(JSON.stringify({ t: 'chat.thinking', on: true, stt: true }));
+  try {
+    const text = await transcribePcm16(pcm, sampleRate);
+    log('info', `heard (${from}): "${text}"`);
+    if (text) await handleChat(text, from);
+    else broadcast(JSON.stringify({ t: 'chat', id: `a${Date.now()}`, role: 'assistant', text: "I didn't catch that.", at: Date.now() }));
+  } catch (e) {
+    log('error', `speech to text failed: ${(e as Error).message}`);
+  } finally {
+    broadcast(JSON.stringify({ t: 'chat.thinking', on: false }));
+  }
+}
+
 // ----------------------------------------------------------------------------- commands
 function applyCommand(msg: Record<string, unknown>, from: string): void {
   switch (msg.cmd) {
-    case 'restart': session.gesture('restart'); log('info', `restart (${from})`); break;
+    case 'restart': case 'start': session.gesture('restart'); log('info', `start/restart (${from})`); break;
+    case 'stop': session.gesture('stop'); log('info', `stop (${from})`); break;
     case 'set': {
       const c = (msg.config ?? {}) as Partial<AppConfig>;
       if (Array.isArray(c.models) && c.models.length) config.models = c.models.map(String);
@@ -162,6 +234,14 @@ function applyCommand(msg: Record<string, unknown>, from: string): void {
       break;
     }
     case 'replay': msg.action === 'stop' ? stopReplaySource() : startReplaySource(Boolean(msg.loop), Number(msg.fps ?? 6)); break;
+    case 'set_reference': {
+      const kind = msg.kind === 'open' ? 'open' : msg.kind === 'closed' ? 'closed' : null;
+      if (!kind || !latestFrame) { log('warn', 'set_reference: need kind open|closed and a live frame'); break; }
+      writeFileSync(resolve(REFS_DIR, `${kind}.jpg`), latestFrame.jpeg);
+      detector.config.refs = loadRefs();
+      log('info', `reference "${kind}" captured from the live frame (${from})`);
+      break;
+    }
     default: log('warn', `unknown cmd ${String(msg.cmd)}`);
   }
   broadcastState();
@@ -189,7 +269,18 @@ const server = http.createServer((req, res) => {
   if (url.pathname === '/api/state') return send(200, stateMessage());
   if (url.pathname === '/api/models') return send(200, JSON.stringify({ candidates: CANDIDATE_MODELS, bench: latestBench(), default_prompt: DEFAULT_PROMPT }));
   if (url.pathname === '/api/log') return send(200, JSON.stringify(logLines));
+  if (url.pathname.startsWith('/refs/')) {
+    const f = resolve(REFS_DIR, url.pathname.slice(6).replace(/[^a-z.]/g, ''));
+    return existsSync(f) ? send(200, readFileSync(f), 'image/jpeg') : send(404, 'no reference yet', 'text/plain');
+  }
   if (url.pathname === '/health') return send(200, '{"ok":true}');
+  if (url.pathname === '/api/chat' && req.method === 'GET') return send(200, JSON.stringify(agent.history));
+  if (url.pathname === '/api/chat' && req.method === 'POST') {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => { try { void handleChat(String(JSON.parse(body || '{}').text ?? ''), 'http'); send(200, '{"ok":true}'); } catch (e) { send(400, JSON.stringify({ error: String((e as Error).message) })); } });
+    return;
+  }
   if (url.pathname === '/api/cmd' && req.method === 'POST') {
     let body = '';
     req.on('data', (c) => (body += c));
@@ -214,9 +305,15 @@ wss.on('connection', (ws, req) => {
     ws.send(stateMessage());
     ws.on('message', (data, isBinary) => {
       if (isBinary) return;
-      try { const msg = JSON.parse(data.toString()); if (msg.t === 'cmd') applyCommand(msg, 'desktop'); else if (msg.t === 'ping') ws.send(JSON.stringify({ t: 'pong', ts: msg.ts, server_now: Date.now() })); } catch { /* ignore */ }
+      try {
+        const msg = JSON.parse(data.toString());
+        if (msg.t === 'cmd') applyCommand(msg, 'desktop');
+        else if (msg.t === 'chat') void handleChat(String(msg.text ?? ''), 'console');
+        else if (msg.t === 'ping') ws.send(JSON.stringify({ t: 'pong', ts: msg.ts, server_now: Date.now() }));
+      } catch { /* ignore */ }
     });
     ws.on('close', () => desktops.delete(ws));
+    ws.send(JSON.stringify({ t: 'chat.history', messages: agent.history }));
     return;
   }
   if (role === 'glasses' || role === 'webcam') {
@@ -227,11 +324,25 @@ wss.on('connection', (ws, req) => {
     log('info', `${role} connected from ${remote}`);
     ws.send(stateMessage());
     ws.on('message', (data, isBinary) => {
-      if (isBinary) { const f = decodeFrame(data as Buffer); if (f) onFrame(src, f); return; }
+      if (isBinary) {
+        const buf = data as Buffer;
+        // Audio envelope: [u16 len]["{...\"t\":\"audio\"...}"][pcm16]; frames use the same envelope with a JPEG body.
+        if (buf.length > 4 && !(buf[0] === 0xff && buf[1] === 0xd8)) {
+          const n = buf.readUInt16BE(0);
+          try {
+            const h = JSON.parse(buf.subarray(2, 2 + n).toString('utf8'));
+            if (h.t === 'audio') { void handleAudio(buf.subarray(2 + n), id, Number(h.rate ?? 16000)); return; }
+          } catch { /* not an audio envelope */ }
+        }
+        const f = decodeFrame(buf);
+        if (f) onFrame(src, f);
+        return;
+      }
       try {
         const msg = JSON.parse(data.toString());
         if (msg.t === 'hello') { src.info = msg.device ?? msg; log('info', `${id} hello ${JSON.stringify(src.info).slice(0, 160)}`); }
         else if (msg.t === 'gesture') { session.gesture(String(msg.name)); log('info', `gesture ${msg.name} from ${id}`); }
+        else if (msg.t === 'chat') void handleChat(String(msg.text ?? ''), id);
         else if (msg.t === 'cmd') applyCommand(msg, id);
         else if (msg.t === 'ping') ws.send(JSON.stringify({ t: 'pong', ts: msg.ts, server_now: Date.now() }));
       } catch { /* ignore */ }

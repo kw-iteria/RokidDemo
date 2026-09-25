@@ -28,6 +28,11 @@ class AppModel(context: Context) {
     val link = ServerLink(
         onStateJson = ::onServerState,
         onConnection = { up, endpoint -> _state.update { it.copy(connected = up, host = endpoint, phase = if (up) it.phase else "CONNECTING") } },
+        onEvent = ::onServerEvent,
+    )
+    private val talk = PushToTalk(
+        onAudio = { pcm, rate -> link.sendAudio(pcm, rate); _state.update { it.copy(thinking = true) } },
+        onState = { rec -> _state.update { it.copy(listening = rec) }; if (rec) sounds.tick() },
     )
     private var lastPhase = ""
     private var alarmJob: Job? = null
@@ -67,6 +72,23 @@ class AppModel(context: Context) {
         }
     }
 
+    private fun onServerEvent(j: JSONObject) {
+        when (j.optString("t")) {
+            "chat" -> if (j.optString("role") == "assistant") {
+                val text = j.optString("text")
+                _state.update { it.copy(chatText = text, chatAt = System.currentTimeMillis(), thinking = false) }
+                sounds.say(text)
+            }
+            "chat.thinking" -> _state.update { it.copy(thinking = j.optBoolean("on")) }
+        }
+    }
+
+    /** Temple tap: record one utterance and send it to the assistant. */
+    fun talk() {
+        if (!link.connected) { sounds.tick(); return }
+        talk.toggle()
+    }
+
     private fun onPhaseChange(to: String) {
         when (to) {
             "AWAIT_CLOSE" -> { sounds.tick(); sounds.say("Please close the plate press") }
@@ -97,6 +119,7 @@ class AppModel(context: Context) {
     }
 
     fun close() {
+        talk.stop()
         stopAlarm()
         scope.cancel()
         link.close()

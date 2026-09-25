@@ -79,7 +79,7 @@ export class RealtimeSession {
     }
   }
 
-  async ask(jpeg: Buffer, instructions: string, question: string, opts: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<RealtimeAnswer> {
+  async ask(jpeg: Buffer, instructions: string, question: string, opts: { timeoutMs?: number; signal?: AbortSignal; refs?: { label: string; jpeg: Buffer }[] } = {}): Promise<RealtimeAnswer> {
     await this.ensureOpen(instructions);
     const ws = this.ws;
     if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error('realtime not connected');
@@ -95,6 +95,13 @@ export class RealtimeSession {
         if (p.responseId) { try { ws.send(JSON.stringify({ type: 'response.cancel', response_id: p.responseId })); } catch { /* ignore */ } }
         reject(new Error('aborted'));
       }, { once: true });
+      const content: unknown[] = [];
+      for (const r of opts.refs ?? []) {
+        content.push({ type: 'input_text', text: `Reference photo, ${r.label}:` });
+        content.push({ type: 'input_image', image_url: `data:image/jpeg;base64,${r.jpeg.toString('base64')}`, detail: 'low' });
+      }
+      content.push({ type: 'input_image', image_url: `data:image/jpeg;base64,${jpeg.toString('base64')}`, detail: 'low' });
+      content.push({ type: 'input_text', text: question });
       ws.send(JSON.stringify({
         type: 'response.create',
         response: {
@@ -102,7 +109,7 @@ export class RealtimeSession {
           metadata: { key },
           output_modalities: ['text'],
           instructions,
-          input: [{ type: 'message', role: 'user', content: [{ type: 'input_image', image_url: `data:image/jpeg;base64,${jpeg.toString('base64')}`, detail: 'low' }, { type: 'input_text', text: question }] }],
+          input: [{ type: 'message', role: 'user', content }],
         },
       }));
     });

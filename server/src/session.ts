@@ -15,7 +15,7 @@ export interface SessionParams {
 export const DEFAULT_PARAMS: SessionParams = {
   countdown_ms: 10_000,
   confirmations: 2,
-  fast_confidence: 0.9,
+  fast_confidence: 1.01,   // >1 disables the single-verdict shortcut
   backdate: true,
   auto_restart_ms: 12_000,
   lost_after_ms: 3_000,
@@ -43,7 +43,7 @@ export interface SessionSnapshot {
 }
 
 const TEXT: Record<Phase, { message: string; sub: string }> = {
-  IDLE: { message: 'Ready', sub: 'Waiting for camera' },
+  IDLE: { message: 'Ready', sub: 'Say "start plate press workflow"' },
   SEARCHING: { message: 'Looking for the plate press', sub: 'Look at the press' },
   AWAIT_CLOSE: { message: 'Please close the plate press', sub: '' },
   COUNTDOWN: { message: 'Pressing', sub: 'Keep the press closed' },
@@ -59,6 +59,9 @@ export class PressSession {
   private streakState: string | null = null;
   private streakCount = 0;
   private streakFirstTs = 0;
+  private openSeen = 0;      // open verdicts seen this run (a close is only accepted after the box was seen open)
+  private visibleStreakState: string | null = null;
+  private visibleStreakCount = 0;
   private lastSeenTs = 0;
   private lastVerdict: VerdictEvent | null = null;
   private lastAcceptedFrameTs = 0;
@@ -103,16 +106,17 @@ export class PressSession {
     this.lastAcceptedFrameTs = Date.now(); // verdicts for frames captured before this run are ignored
     this.lastVerdict = null;
     this.lastSeenTs = 0;
+    this.openSeen = 0;
     this.log(`run ${this.run} started`);
     this.phase = 'IDLE';
     this.setPhase('SEARCHING');
   }
 
-  /** Camera went away: drop back to IDLE (a new run starts when frames return). */
-  idle(): void {
+  /** Back to standby (camera lost, workflow stopped, or completion hold elapsed). */
+  idle(reason = 'standby'): void {
     if (this.phase === 'IDLE') return;
     this.countdown = null;
-    this.log('camera lost');
+    this.log(reason);
     this.setPhase('IDLE');
   }
 
@@ -123,7 +127,7 @@ export class PressSession {
       return;
     }
     if (this.phase === 'COMPLETE' && this.params.auto_restart_ms > 0 && now - this.phase_since >= this.params.auto_restart_ms) {
-      this.start();
+      this.idle(); // back to standby; the next "start" (chat, tap, button) begins a new run
       return;
     }
     this.emit(false);
@@ -137,21 +141,26 @@ export class PressSession {
     const v = ev.verdict;
     if (v.press_visible && v.lid !== 'unknown') this.lastSeenTs = ev.frame_ts;
 
-    // Streak tracking of the lid state (unknown/partial neither extend nor break an open/closed streak).
+    // Streak tracking: only strictly consecutive identical verdicts count. Anything else
+    // (partial, unknown, not visible, the other state) restarts the streak.
     const s = v.press_visible ? v.lid : 'unknown';
-    if (s === 'open' || s === 'closed') {
-      if (this.streakState === s) this.streakCount++;
-      else { this.streakState = s; this.streakCount = 1; this.streakFirstTs = ev.frame_ts; }
-    }
+    const visibleState = v.press_visible && v.confidence >= 0.5 ? 'visible' : 'none';
+    if (this.streakState === s) this.streakCount++;
+    else { this.streakState = s; this.streakCount = 1; this.streakFirstTs = ev.frame_ts; }
+    if (s === 'open') this.openSeen++;
+    if (this.visibleStreakState === visibleState) this.visibleStreakCount++;
+    else { this.visibleStreakState = visibleState; this.visibleStreakCount = 1; }
     const confirmed = (state: 'open' | 'closed') =>
       this.streakState === state && (this.streakCount >= this.params.confirmations || (this.streakCount >= 1 && v.confidence >= this.params.fast_confidence));
 
     switch (this.phase) {
       case 'SEARCHING':
-        if (v.press_visible && v.confidence >= 0.5) this.setPhase('AWAIT_CLOSE', ev.frame_ts);
+        if (this.visibleStreakState === 'visible' && this.visibleStreakCount >= this.params.confirmations) this.setPhase('AWAIT_CLOSE', ev.frame_ts);
         break;
       case 'AWAIT_CLOSE':
-        if (confirmed('closed')) {
+        // A close counts only after the box was seen open in this run (the closing is observed), or,
+        // if it was already closed from the start, after a long unbroken closed streak.
+        if (confirmed('closed') && (this.openSeen >= this.params.confirmations || this.streakCount >= this.params.confirmations * 3)) {
           const started_at = this.params.backdate ? this.streakFirstTs : Date.now();
           this.countdown = { started_at, ends_at: started_at + this.params.countdown_ms, duration_ms: this.params.countdown_ms };
           this.log(`closed detected (model latency ${Math.round(ev.latency_ms)} ms, backdated ${Date.now() - started_at} ms)`);
@@ -170,12 +179,11 @@ export class PressSession {
     this.emit(false);
   }
 
-  /** Temple tap on the glasses / button on the desktop. */
+  /** Temple double-tap on the glasses / button on the desktop: start, or restart a run in progress. */
   gesture(name: string): void {
-    if (name === 'tap' || name === 'restart') {
-      if (this.phase === 'COMPLETE' || this.phase === 'IDLE') this.start();
-      else if (name === 'restart') this.start();
-    }
+    if (name === 'tap') { if (this.phase === 'COMPLETE' || this.phase === 'IDLE') this.start(); }
+    else if (name === 'restart' || name === 'start') this.start();
+    else if (name === 'stop') this.idle('stopped');
   }
 
   setParams(p: Partial<SessionParams>): void {

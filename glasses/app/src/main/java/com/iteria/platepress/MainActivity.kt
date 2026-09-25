@@ -22,17 +22,18 @@ class MainActivity : ComponentActivity() {
     private lateinit var model: AppModel
     private var camera: CameraStreamer? = null
 
-    private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) startCamera()
+    private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
+        if (granted[Manifest.permission.CAMERA] == true) startCamera()
     }
 
-    // Rokid temple button: tap = restart after completion, long press = restart now, double tap = voice on/off.
+    // Rokid temple button: tap = talk to the assistant, double tap = start / restart the workflow,
+    // long press (when the system lets it through) = spoken prompts on/off.
     private val gestures = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.action) {
-                ACTION_CLICK -> model.gesture("tap")
-                ACTION_LONG_PRESS -> model.gesture("restart")
-                ACTION_DOUBLE_CLICK -> model.toggleVoice()
+                ACTION_CLICK -> model.talk()
+                ACTION_DOUBLE_CLICK -> model.gesture("restart")
+                ACTION_LONG_PRESS -> model.toggleVoice()
             }
         }
     }
@@ -51,8 +52,10 @@ class MainActivity : ComponentActivity() {
                 fps = { camera?.fps ?: 0f },
             )
         }
+        val needed = listOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
+            .filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) startCamera()
-        else cameraPermission.launch(Manifest.permission.CAMERA)
+        if (needed.isNotEmpty()) permissions.launch(needed.toTypedArray())
     }
 
     private fun startCamera() {
@@ -75,7 +78,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean = when (keyCode) {
-        KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_DPAD_CENTER -> { model.gesture("tap"); true }
+        KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_DPAD_CENTER -> { model.talk(); true }
         else -> super.onKeyDown(keyCode, event)
     }
 

@@ -15,6 +15,7 @@ import java.util.concurrent.TimeUnit
 class ServerLink(
     private val onStateJson: (JSONObject) -> Unit,
     private val onConnection: (up: Boolean, endpoint: String) -> Unit,
+    private val onEvent: (JSONObject) -> Unit = {},
 ) {
     private val client = OkHttpClient.Builder()
         .pingInterval(5, TimeUnit.SECONDS)
@@ -55,6 +56,7 @@ class ServerLink(
                             val rtt = System.currentTimeMillis() - j.getLong("ts")
                             clockOffset = j.getLong("server_now") + rtt / 2 - System.currentTimeMillis()
                         }
+                        "chat", "chat.thinking" -> onEvent(j)
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "bad message: ${e.message}")
@@ -91,6 +93,19 @@ class ServerLink(
     }
 
     fun sendJson(obj: JSONObject) { ws?.send(obj.toString()) }
+
+    /** Push-to-talk audio: same envelope as frames, header {"t":"audio","rate":16000}, body PCM16 mono. */
+    fun sendAudio(pcm: ByteArray, sampleRate: Int): Boolean {
+        val socket = ws ?: return false
+        if (!connected) return false
+        val header = JSONObject().put("t", "audio").put("rate", sampleRate).put("ts", System.currentTimeMillis()).toString().toByteArray()
+        val out = ByteArray(2 + header.size + pcm.size)
+        out[0] = (header.size shr 8).toByte()
+        out[1] = (header.size and 0xff).toByte()
+        System.arraycopy(header, 0, out, 2, header.size)
+        System.arraycopy(pcm, 0, out, 2 + header.size, pcm.size)
+        return socket.send(out.toByteString())
+    }
     fun ping() { sendJson(JSONObject().put("t", "ping").put("ts", System.currentTimeMillis())) }
 
     fun close() {

@@ -19,6 +19,11 @@ data class HudState(
     val connected: Boolean = false,
     val host: String = "",
     val voice: Boolean = true,
+    val cameraLive: Boolean = false,
+    val chatText: String = "",
+    val chatAt: Long = 0L,
+    val listening: Boolean = false,
+    val thinking: Boolean = false,
 ) {
     companion object {
         fun fromServer(json: JSONObject, prev: HudState): HudState {
@@ -38,6 +43,7 @@ data class HudState(
                 lastVisible = lv?.optBoolean("press_visible") ?: false,
                 lastLatencyMs = lv?.optInt("latency_ms") ?: 0,
                 run = s.optInt("run"),
+                cameraLive = json.optJSONObject("camera")?.optBoolean("live") ?: prev.cameraLive,
             )
         }
     }

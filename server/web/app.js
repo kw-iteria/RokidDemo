@@ -10,6 +10,7 @@
     source: $('source'), model: $('model'), model2: $('model2'), inflight: $('inflight'), interval: $('interval'),
     confirm: $('confirm'), dwell: $('dwell'), hosts: $('hosts'), log: $('log'),
     prompt: $('prompt'), promptBox: $('prompt-box'),
+    chatLog: $('chat-log'), chatForm: $('chat-form'), chatInput: $('chat-input'), chatThinking: $('chat-thinking'), mic: $('btn-mic'), hudChat: $('hud-chat'),
   };
   const state = { snap: null, offset: 0, verdicts: [], lastFrameUrl: null, sound: true, voice: false, lastPhase: null, lastBeep: 0, defaultPrompt: '', bench: null, editing: false };
 
@@ -26,6 +27,9 @@
       if (msg.t === 'state') onState(msg);
       else if (msg.t === 'verdict') onVerdict(msg);
       else if (msg.t === 'log') addLog(msg);
+      else if (msg.t === 'chat') addChat(msg, true);
+      else if (msg.t === 'chat.history') { els.chatLog.querySelectorAll('li:not(.hint)').forEach((n) => n.remove()); for (const m of msg.messages) addChat(m, false); }
+      else if (msg.t === 'chat.thinking') { els.chatThinking.hidden = !msg.on; els.chatThinking.textContent = msg.stt ? 'listening…' : 'thinking…'; }
     };
   }
   function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
@@ -99,7 +103,12 @@
       const frac = remaining / s.countdown.duration_ms;
       els.arc.style.strokeDashoffset = String(553 * (1 - frac));
       els.number.textContent = String(Math.ceil(remaining / 1000));
+    } else {
+      els.number.textContent = '';
     }
+    const fresh = state.hudChat && Date.now() - state.hudChat.at < 12_000;
+    els.hudChat.hidden = !fresh;
+    if (fresh) els.hudChat.textContent = state.hudChat.text;
   }
   function loop() { renderHud(); requestAnimationFrame(loop); }
   requestAnimationFrame(loop);
@@ -194,7 +203,6 @@
     el.addEventListener('change', pushConfig);
   }
   els.source.addEventListener('change', () => cmd({ cmd: 'set', config: { source: els.source.value } }));
-  $('btn-restart').onclick = () => cmd({ cmd: 'restart' });
   let replaying = false;
   $('btn-replay').onclick = (e) => { replaying = !replaying; cmd({ cmd: 'replay', action: replaying ? 'start' : 'stop', loop: false, fps: 6 }); e.target.textContent = replaying ? 'Stop replay' : 'Replay demo clip'; };
   $('btn-sound').onclick = (e) => { state.sound = !state.sound; e.target.setAttribute('aria-pressed', String(state.sound)); e.target.textContent = state.sound ? 'Sound on' : 'Sound off'; if (state.sound) beep(660, 80); };
@@ -202,6 +210,44 @@
   $('btn-prompt').onclick = () => { els.promptBox.hidden = !els.promptBox.hidden; };
   $('btn-prompt-save').onclick = () => cmd({ cmd: 'set', config: { prompt: els.prompt.value } });
   $('btn-prompt-reset').onclick = () => { els.prompt.value = state.defaultPrompt; cmd({ cmd: 'set', config: { prompt: state.defaultPrompt } }); };
+
+  // ------------------------------------------------------------------ chat
+  function addChat(m, fresh) {
+    const li = document.createElement('li');
+    li.className = m.role;
+    li.textContent = m.text;
+    const small = document.createElement('small');
+    small.textContent = `${new Date(m.at).toLocaleTimeString([], { hour12: false })}${m.from && m.role === 'user' ? ` · from ${m.from}` : ''}`;
+    li.appendChild(small);
+    els.chatLog.appendChild(li);
+    els.chatLog.scrollTop = els.chatLog.scrollHeight;
+    if (m.role === 'assistant' && fresh) { state.hudChat = { text: m.text, at: Date.now() }; say(m.text); }
+  }
+  els.chatForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const text = els.chatInput.value.trim();
+    if (!text) return;
+    send({ t: 'chat', text });
+    els.chatInput.value = '';
+  });
+  // Voice at the Mac: browser speech recognition, one utterance per click.
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let rec = null;
+  if (!SR) { els.mic.disabled = true; els.mic.title = 'Speech recognition is not available in this browser'; }
+  els.mic.onclick = () => {
+    if (rec) { rec.stop(); return; }
+    rec = new SR(); rec.lang = 'en-US'; rec.interimResults = true; rec.continuous = false;
+    els.mic.setAttribute('aria-pressed', 'true'); els.mic.textContent = 'Listening';
+    rec.onresult = (ev) => { let t = ''; for (const r of ev.results) t += r[0].transcript; els.chatInput.value = t; if (ev.results[ev.results.length - 1].isFinal) { send({ t: 'chat', text: t.trim() }); els.chatInput.value = ''; } };
+    rec.onend = () => { rec = null; els.mic.setAttribute('aria-pressed', 'false'); els.mic.textContent = 'Mic'; };
+    rec.onerror = () => { rec = null; els.mic.setAttribute('aria-pressed', 'false'); els.mic.textContent = 'Mic'; };
+    rec.start();
+  };
+  $('btn-start').onclick = () => cmd({ cmd: 'start' });
+  $('btn-stop').onclick = () => cmd({ cmd: 'stop' });
+  const refreshRefs = () => { const t = Date.now(); $('ref-open').src = `/refs/open.jpg?${t}`; $('ref-closed').src = `/refs/closed.jpg?${t}`; };
+  $('btn-ref-open').onclick = () => { cmd({ cmd: 'set_reference', kind: 'open' }); setTimeout(refreshRefs, 400); };
+  $('btn-ref-closed').onclick = () => { cmd({ cmd: 'set_reference', kind: 'closed' }); setTimeout(refreshRefs, 400); };
 
   // ------------------------------------------------------------------ webcam source (this computer's camera acts like the glasses)
   let camWs = null, camTimer = null;

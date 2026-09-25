@@ -1,7 +1,7 @@
 // Benchmark vision models on 1-fps frames of the demo clip: latency + accuracy.
 //   node tools/bench.ts [--models a,b,c] [--frames all|quick] [--concurrency 3] [--width 480] [--refs]
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { loadEnv } from '../server/src/env.ts';
 import { CANDIDATE_MODELS, classifyFrame, type LidState } from '../server/src/vision.ts';
@@ -36,10 +36,13 @@ if (!existsSync(frameDir)) {
 const frames = frameIds.map((id) => ({ id, truth: TRUTH[id], jpeg: readFileSync(resolve(frameDir, `f_${String(id).padStart(3, '0')}.jpg`)) }));
 const refs = useRefs
   ? [
-      { label: 'plate press OPEN (lid up)', jpeg: readFileSync(resolve(frameDir, 'f_002.jpg')) },
-      { label: 'plate press CLOSED (lid down, flat)', jpeg: readFileSync(resolve(frameDir, 'f_015.jpg')) },
+      { label: 'the plate press OPEN (lid raised, inside visible)', jpeg: readFileSync(resolve('server/refs/open.jpg')) },
+      { label: 'the plate press CLOSED (lid down, flat block)', jpeg: readFileSync(resolve('server/refs/closed.jpg')) },
     ]
   : undefined;
+// Negative images (no press at all): expect press_visible=false.
+const negDir = args.get('negatives');
+if (negDir) for (const f of readdirSync(resolve(negDir)).filter((x) => x.endsWith('.jpg')).sort()) frames.push({ id: 100 + frames.length, truth: 'none' as LidState, jpeg: readFileSync(resolve(negDir, f)) });
 
 async function runPool<T, R>(items: T[], n: number, fn: (t: T) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length);
@@ -60,26 +63,29 @@ for (const model of models) {
   const wall = performance.now() - t0;
   const ok = results.filter((r) => r.verdict);
   const lat = ok.map((r) => r.latency_ms);
-  let exact = 0, strictN = 0, strictOk = 0, visible = 0;
+  let exact = 0, strictN = 0, strictOk = 0, visible = 0, negN = 0, negFalse = 0;
   const rows: string[] = [];
   results.forEach((r, i) => {
     const f = frames[i];
     const v = r.verdict;
     if (v) {
-      if (v.press_visible) visible++;
-      if (v.lid === f.truth) exact++;
-      if (f.truth !== 'partial') { strictN++; if (v.lid === f.truth) strictOk++; }
+      if (f.truth === ('none' as LidState)) { negN++; if (v.press_visible) negFalse++; }
+      else {
+        if (v.press_visible) visible++;
+        if (v.lid === f.truth) exact++;
+        if (f.truth !== 'partial') { strictN++; if (v.lid === f.truth) strictOk++; }
+      }
     }
     rows.push(`  f${String(f.id).padStart(2)} truth=${f.truth.padEnd(7)} got=${(v?.lid ?? 'ERR').padEnd(7)} conf=${v ? v.confidence.toFixed(2) : ' -  '} ${Math.round(r.latency_ms)}ms${r.error ? '  ' + r.error.slice(0, 120) : ''}`);
   });
   const row = {
     model, n: frames.length, errors: results.length - ok.length,
     p50_ms: Math.round(pct(lat, 0.5)), p90_ms: Math.round(pct(lat, 0.9)), mean_ms: Math.round(lat.reduce((a, b) => a + b, 0) / (lat.length || 1)),
-    exact_acc: +(exact / frames.length).toFixed(2), strict_acc: +(strictOk / (strictN || 1)).toFixed(2), visible_rate: +(visible / (ok.length || 1)).toFixed(2),
+    exact_acc: +(exact / (frames.length - negN || 1)).toFixed(2), strict_acc: +(strictOk / (strictN || 1)).toFixed(2), visible_rate: +(visible / (ok.length - negN || 1)).toFixed(2), false_pos: negN ? `${negFalse}/${negN}` : '-',
     wall_ms: Math.round(wall),
   };
   summary.push(row);
-  console.log(`\n=== ${model} ===  p50=${row.p50_ms}ms p90=${row.p90_ms}ms mean=${row.mean_ms}ms  exact=${row.exact_acc} strict=${row.strict_acc} errors=${row.errors}`);
+  console.log(`\n=== ${model} ===  p50=${row.p50_ms}ms p90=${row.p90_ms}ms mean=${row.mean_ms}ms  exact=${row.exact_acc} strict=${row.strict_acc} false_pos=${row.false_pos} errors=${row.errors}`);
   console.log(rows.join('\n'));
   const first = results.find((r) => r.error);
   if (first) console.log('  first error:', first.error);
