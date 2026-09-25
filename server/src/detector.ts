@@ -29,6 +29,7 @@ export interface DetectorStats {
   errors: number;
   submitted: number;
   completed: number;
+  per_model: Record<string, { wins: number; p50_ms: number; errors: number }>;
 }
 
 export class Detector {
@@ -45,6 +46,7 @@ export class Detector {
   private submitted = 0;
   private completed = 0;
   private running = false;
+  private perModel = new Map<string, { wins: number; lat: number[]; errors: number }>();
   onVerdict: (v: VerdictOut) => void = () => {};
   onError: (model: string, error: string) => void = () => {};
 
@@ -91,11 +93,15 @@ export class Detector {
     try {
       const attempts = models.map((m) =>
         classifyFrame(m, frame.jpeg, { prompt: this.config.prompt, signal: ac.signal, timeoutMs: this.config.timeoutMs, refs: this.config.refs }).then((r) => {
-          if (!r.verdict) throw new Error(`${m}: ${r.error ?? 'no verdict'}`);
+          if (!r.verdict) {
+            if (r.error !== 'aborted') { const pm = this.perModel.get(m) ?? { wins: 0, lat: [], errors: 0 }; pm.errors++; this.perModel.set(m, pm); }
+            throw new Error(`${m}: ${r.error ?? 'no verdict'}`);
+          }
           return r as ClassifyResult & { verdict: Verdict };
         }),
       );
       const winner = await Promise.any(attempts);
+      { const pm = this.perModel.get(winner.model) ?? { wins: 0, lat: [], errors: 0 }; pm.wins++; pm.lat.push(winner.latency_ms); if (pm.lat.length > 40) pm.lat.shift(); this.perModel.set(winner.model, pm); }
       ac.abort(); // cancel the slower racers
       const latency_ms = performance.now() - t0;
       this.latencies.push(latency_ms);
@@ -127,6 +133,7 @@ export class Detector {
       errors: this.errors,
       submitted: this.submitted,
       completed: this.completed,
+      per_model: Object.fromEntries([...this.perModel].map(([m, v]) => { const l = [...v.lat].sort((a, b) => a - b); return [m, { wins: v.wins, p50_ms: Math.round(l[Math.floor(l.length / 2)] ?? 0), errors: v.errors }]; })),
     };
   }
 }

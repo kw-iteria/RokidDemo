@@ -29,9 +29,9 @@ interface AppConfig {
   params: SessionParams;
 }
 const config: AppConfig = {
-  models: (process.env.PRESS_MODELS ?? 'gpt-4.1-mini,gpt-5.4-mini').split(',').map((s) => s.trim()).filter(Boolean),
-  maxInflight: 3,
-  minIntervalMs: 250,
+  models: (process.env.PRESS_MODELS ?? 'gpt-realtime-mini,gpt-4.1-mini').split(',').map((s) => s.trim()).filter(Boolean),
+  maxInflight: 4,
+  minIntervalMs: 150,
   timeoutMs: 8000,
   prompt: DEFAULT_PROMPT,
   source: 'auto',
@@ -170,11 +170,18 @@ function applyCommand(msg: Record<string, unknown>, from: string): void {
 // ----------------------------------------------------------------------------- http
 const MIME: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.mp4': 'video/mp4', '.json': 'application/json', '.woff2': 'font/woff2' };
 function latestBench(): unknown {
+  // Merge every bench json (chronological), keeping the newest row per model.
   const dir = resolve(ROOT, 'bench-results');
   if (!existsSync(dir)) return null;
   const files = readdirSync(dir).filter((f) => f.endsWith('.json')).sort();
-  if (!files.length) return null;
-  try { return JSON.parse(readFileSync(resolve(dir, files[files.length - 1]), 'utf8')); } catch { return null; }
+  const byModel = new Map<string, unknown>();
+  for (const f of files) {
+    try {
+      const j = JSON.parse(readFileSync(resolve(dir, f), 'utf8'));
+      for (const row of j.summary ?? []) if (row.p50_ms) byModel.set(row.model, row);
+    } catch { /* skip */ }
+  }
+  return byModel.size ? { summary: [...byModel.values()] } : null;
 }
 const server = http.createServer((req, res) => {
   const url = new URL(req.url ?? '/', 'http://x');

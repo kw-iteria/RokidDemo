@@ -48,14 +48,21 @@ No glasses at hand? In the console press **Replay demo clip** (the phone video i
 * Frames leave the glasses at ~6 fps, 480 px long edge, JPEG q60 (~25 KB). LAN transit is a few ms.
 * The server keeps up to 3 model requests in flight, spaced ≥250 ms, always on the newest frame,
   and drops verdicts that arrive out of order. Effective decision rate ≈ 3–4 per second.
-* Optional **race**: each frame goes to two models; the first valid verdict wins, the other is aborted.
-  The default pair (`gpt-4.1-mini` + `gpt-5.4-mini`) measured ~750 ms median in this network.
+* **Persistent session**: `gpt-realtime-mini` runs over one long-lived OpenAI Realtime WebSocket
+  (`server/src/realtime.ts`); every frame is an out-of-band response, so there is no per-request
+  TLS/HTTP overhead. ~400 ms median per verdict here, versus ~750–900 ms for the request path.
+* Optional **race**: each frame goes to two models; the first valid verdict wins, the other is
+  cancelled. Default pair: `gpt-realtime-mini` + `gpt-4.1-mini` (the HTTP model only covers the tail).
+* Other vendors with OpenAI-compatible endpoints work by prefixing the model name
+  (`groq/…`, `fireworks/…`, `together/…`, `xai/…`, `cerebras/…`, `openrouter/…`, `ollama/…`) and
+  putting the matching `*_API_KEY` in `.env` — see `COMPAT_ENDPOINTS` in `server/src/vision.ts`.
 * Transitions need `confirmations` agreeing verdicts (default 2), or one verdict at ≥0.9 confidence.
 * The countdown deadline is `first closed frame + 10 s`; the glasses animate it locally from a
   server-clock offset, so the ring is smooth and nothing waits on the network.
 
 ## Benchmark
 
-`npm run bench -- --frames all` (also `--refs` for few-shot reference images, `--width 320`).
+`npm run bench -- --frames all` (also `--refs` for few-shot reference images, `--width 320`), and
+`node tools/bench_live.ts --frames all --concurrency 3` for the persistent-session APIs.
 Results land in `bench-results/` and show up as badges in the console's model picker.
 Findings from this machine are in the last section of `NOTES.md`.

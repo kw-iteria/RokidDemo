@@ -114,7 +114,7 @@
       ['Errors', String(st.errors)],
       ['Run', `${s.run} · ${s.phase.toLowerCase().replace('_', ' ')}`],
       ['Last close detection', closedEv ? closedEv.text.replace('closed detected ', '') : '—'],
-      ['Server clock offset', `${state.offset} ms`],
+      ['Race wins', Object.entries(st.per_model || {}).map(([m, v]) => `${m} ${v.wins} (${v.p50_ms} ms${v.errors ? `, ${v.errors} err` : ''})`).join(' · ') || '—'],
     ].map(([k, v]) => `<div><span>${k}</span>${v}</div>`).join('');
   }
 

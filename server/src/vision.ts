@@ -2,8 +2,10 @@
 // Speaks raw REST to Gemini (generateContent) and OpenAI (Responses API) so there is
 // no SDK overhead, and remembers per-model which "no thinking" knob each API accepts.
 
+import { RealtimeSession } from './realtime.ts';
+
 export type LidState = 'open' | 'closed' | 'partial' | 'unknown';
-export type Provider = 'gemini' | 'openai';
+export type Provider = 'gemini' | 'openai' | 'openai-realtime' | 'compat';
 
 export interface Verdict {
   press_visible: boolean;
@@ -61,12 +63,29 @@ const GEMINI_SCHEMA = {
   propertyOrdering: ['press_visible', 'lid', 'confidence'],
 };
 
+/**
+ * OpenAI-compatible chat/completions endpoints, selected by a "vendor/" prefix on the model name,
+ * e.g. "groq/meta-llama/llama-4-scout-17b-16e-instruct". Set the matching *_API_KEY in .env.
+ */
+export const COMPAT_ENDPOINTS: Record<string, { base: string; key: string }> = {
+  groq: { base: 'https://api.groq.com/openai/v1', key: 'GROQ_API_KEY' },
+  fireworks: { base: 'https://api.fireworks.ai/inference/v1', key: 'FIREWORKS_API_KEY' },
+  together: { base: 'https://api.together.xyz/v1', key: 'TOGETHER_API_KEY' },
+  xai: { base: 'https://api.x.ai/v1', key: 'XAI_API_KEY' },
+  cerebras: { base: 'https://api.cerebras.ai/v1', key: 'CEREBRAS_API_KEY' },
+  openrouter: { base: 'https://openrouter.ai/api/v1', key: 'OPENROUTER_API_KEY' },
+  ollama: { base: 'http://localhost:11434/v1', key: '' },
+};
+
 export function providerFor(model: string): Provider {
+  if (/^gpt-realtime/i.test(model)) return 'openai-realtime';
+  if (model.includes('/') && COMPAT_ENDPOINTS[model.split('/')[0]]) return 'compat';
   return /^(gemini|gemma|nano-banana)/i.test(model) ? 'gemini' : 'openai';
 }
 
 /** Curated candidates, fastest-first guesses; the benchmark re-ranks them empirically. */
 export const CANDIDATE_MODELS = [
+  'gpt-realtime-mini',
   'gemini-3.1-flash-lite',
   'gemini-3.5-flash-lite',
   'gemini-2.5-flash-lite',
@@ -224,11 +243,69 @@ async function classifyOpenAI(model: string, jpeg: Buffer, opts: ClassifyOptions
   return { model, provider: 'openai', verdict: null, latency_ms: performance.now() - t0, error: `all reasoning variants rejected: ${lastErr}` };
 }
 
+// --------------------------- OpenAI Realtime (persistent) ---------------------
+const realtimeSessions = new Map<string, RealtimeSession>();
+async function classifyRealtime(model: string, jpeg: Buffer, opts: ClassifyOptions): Promise<ClassifyResult> {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) throw new Error('OPENAI_API_KEY missing');
+  let session = realtimeSessions.get(model);
+  if (!session) { session = new RealtimeSession(model, key); realtimeSessions.set(model, session); }
+  const t0 = performance.now();
+  try {
+    const a = await session.ask(jpeg, opts.prompt ?? DEFAULT_PROMPT, 'Report the state of the press in this frame as the JSON object.', { timeoutMs: opts.timeoutMs ?? 8000, signal: opts.signal });
+    try {
+      return { model, provider: 'openai-realtime', verdict: parseVerdict(a.text), latency_ms: a.latency_ms, raw: a.text, usage: a.usage };
+    } catch (e) {
+      return { model, provider: 'openai-realtime', verdict: null, latency_ms: a.latency_ms, error: `bad JSON: ${a.text.slice(0, 200)} (${(e as Error).message})`, raw: a.text };
+    }
+  } catch (e) {
+    return { model, provider: 'openai-realtime', verdict: null, latency_ms: performance.now() - t0, error: (e as Error).message };
+  }
+}
+
+// --------------------------- OpenAI-compatible endpoints ---------------------
+async function classifyCompat(model: string, jpeg: Buffer, opts: ClassifyOptions): Promise<ClassifyResult> {
+  const vendor = model.split('/')[0];
+  const name = model.slice(vendor.length + 1);
+  const ep = COMPAT_ENDPOINTS[vendor];
+  const key = ep.key ? process.env[ep.key] : '';
+  if (ep.key && !key) throw new Error(`${ep.key} missing`);
+  const content: unknown[] = [{ type: 'text', text: (opts.prompt ?? DEFAULT_PROMPT) + '\nRespond with a JSON object with keys press_visible, lid, confidence.' }];
+  for (const r of opts.refs ?? []) {
+    content.push({ type: 'text', text: `Reference image, ${r.label}:` });
+    content.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${r.jpeg.toString('base64')}` } });
+  }
+  content.push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${jpeg.toString('base64')}` } });
+  const t0 = performance.now();
+  const res = await fetch(`${ep.base}/chat/completions`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...(key ? { authorization: `Bearer ${key}` } : {}) },
+    body: JSON.stringify({ model: name, messages: [{ role: 'user', content }], temperature: 0, max_tokens: 120, response_format: { type: 'json_object' } }),
+    signal: withTimeout(opts.signal, opts.timeoutMs ?? 20_000),
+  });
+  const text = await res.text();
+  if (!res.ok) return { model, provider: 'compat', verdict: null, latency_ms: performance.now() - t0, error: `HTTP ${res.status}: ${text.slice(0, 300)}` };
+  const data = JSON.parse(text);
+  const out: string = data?.choices?.[0]?.message?.content ?? '';
+  try {
+    return { model, provider: 'compat', verdict: parseVerdict(out), latency_ms: performance.now() - t0, raw: out, usage: data?.usage };
+  } catch (e) {
+    return { model, provider: 'compat', verdict: null, latency_ms: performance.now() - t0, error: `bad JSON: ${out.slice(0, 200)} (${(e as Error).message})`, raw: out };
+  }
+}
+
 export async function classifyFrame(model: string, jpeg: Buffer, opts: ClassifyOptions = {}): Promise<ClassifyResult> {
   const provider = providerFor(model);
   try {
-    return provider === 'gemini' ? await classifyGemini(model, jpeg, opts) : await classifyOpenAI(model, jpeg, opts);
+    switch (provider) {
+      case 'gemini': return await classifyGemini(model, jpeg, opts);
+      case 'openai-realtime': return await classifyRealtime(model, jpeg, opts);
+      case 'compat': return await classifyCompat(model, jpeg, opts);
+      default: return await classifyOpenAI(model, jpeg, opts);
+    }
   } catch (e) {
-    return { model, provider, verdict: null, latency_ms: 0, error: (e as Error).name === 'TimeoutError' ? 'timeout' : String((e as Error).message ?? e) };
+    const err = e as Error;
+    const error = err.name === 'TimeoutError' ? 'timeout' : err.name === 'AbortError' || /abort/i.test(err.message ?? '') ? 'aborted' : String(err.message ?? e);
+    return { model, provider, verdict: null, latency_ms: 0, error };
   }
 }

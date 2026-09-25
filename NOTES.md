@@ -28,9 +28,32 @@ Measured from this Mac on 2026-09-24. `strict` = accuracy on unambiguous open/cl
 Network floor from this Mac: a trivial Gemini call ≈ 0.9–1.2 s, a trivial OpenAI call ≈ 1.2–1.9 s
 (TLS ≈ 0.19 s, API TTFB ≈ 0.35–0.7 s), so per-call latency is dominated by the API, not the image.
 
-Default: race `gpt-4.1-mini` + `gpt-5.4-mini` (≈750 ms median end to end in the replay test,
-3.3 decisions/s with 3 in flight, 0 errors over 112 calls). Gemini stays selectable in the console
-for keys with a paid quota.
+## Persistent sessions (one WebSocket, per-frame questions)
+
+| model | p50 sequential | p50 with 3 in flight | strict | notes |
+|---|---|---|---|---|
+| gpt-realtime-mini (OpenAI Realtime) | **388 ms** | 424–515 ms, 5.5–6.8 verdicts/s | 90–95% | out-of-band responses (`conversation: 'none'`) correlated by `metadata`; misreads are "partial" near transitions, which the state machine treats as neutral |
+| gpt-realtime-2.1-mini | ~600 ms | — | — | returns empty text with text-only output; not usable as is |
+| gemini-*-live / native-audio | — | — | — | reject `responseModalities: TEXT` (audio-first models) |
+| gemini-robotics-er-2-streaming-preview | 1.8 s | — | — | too slow |
+
+**Default now:** race `gpt-realtime-mini` + `gpt-4.1-mini`, 4 in flight, ≥150 ms apart. On the
+simulated-glasses run: ~500 ms median verdict, 4.4–4.6 verdicts/s, realtime wins 96% of races,
+close detected 434–564 ms after the closing frame (and backdated), 0 errors.
+
+## Other ways to cut latency further (not tried here; no keys)
+* **Groq** (`groq/meta-llama/llama-4-scout-17b-16e-instruct`, Llama 4 vision on LPUs) and
+  **Cerebras** — typically 200–400 ms for a short vision answer; supported via the `vendor/` prefix.
+* **Fireworks / Together** (Qwen2.5-VL, Llama 4) — ~400–700 ms, same prefix mechanism.
+* **xAI** `grok-4-fast` vision via `xai/…`.
+* **Moondream** (tiny VLM): its cloud API answers yes/no "is the lid closed?" questions in
+  ~200 ms, and the 2B model runs locally on Apple Silicon in ~150–300 ms — zero network.
+* **Local, purpose-built**: a few hundred labelled frames from the real press would train a
+  MobileNet/CLIP-probe classifier that answers in <10 ms on the Mac; keep the VLM as a fallback
+  or a periodic sanity check. This is the only path to a true "instant" close detection.
+* **Anthropic Claude Haiku 4.5** (vision) if a key is available — comparable to gpt-4.1-mini class latency.
+* On the glasses side, frame rate/size are already small; the remaining fixed costs are the
+  model's time-to-first-token and the round trip to the provider's region.
 
 ## Timing observed on the replay (assets/press_demo_640.mp4)
 * press seen → "Please close" in ~1.0 s after the first frame
