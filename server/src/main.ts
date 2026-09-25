@@ -2,9 +2,11 @@
 // or a replayed clip), runs the vision model, drives the workflow state machine, and pushes
 // the same state to the glasses HUD and the desktop dashboard.
 import http from 'node:http';
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { extname, resolve } from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 import { loadEnv } from './env.ts';
 import { decodeFrame, encodeFrame, type Frame } from './frames.ts';
 import { PressSession, DEFAULT_PARAMS, type SessionParams } from './session.ts';
@@ -81,6 +83,25 @@ let latestFrame: Frame | null = null;
 const recentFrames: Frame[] = []; // last few glasses frames, for inspection via /api/frame.jpg?n=
 const recentVerdicts: Record<string, unknown>[] = []; // last judged frames + verdicts: /api/verdicts, /api/judged.jpg?n=
 const judgedFrames: Buffer[] = [];
+// Confident cloud verdicts on real glasses frames become training data for the local classifier (data/live).
+const LIVE_DIR = resolve(ROOT, 'data', 'live');
+let lastLiveSave = 0;
+function collectLiveLabel(v: { verdict: { press_visible: boolean; lid: string; confidence: number; bbox?: number[] }; frame: Frame; model: string }): void {
+  const src = v.frame.header.src ?? '';
+  if (!src.startsWith('glasses')) return;
+  if (v.verdict.confidence < 0.85) return;
+  const lid = v.verdict.press_visible ? v.verdict.lid : 'none';
+  if (lid !== 'open' && lid !== 'closed' && lid !== 'none') return;
+  const now = Date.now();
+  if (now - lastLiveSave < 700) return; // at most ~1.4 frames per second
+  lastLiveSave = now;
+  try {
+    if (!existsSync(LIVE_DIR)) mkdirSync(LIVE_DIR, { recursive: true });
+    const base = resolve(LIVE_DIR, `${v.frame.recv_ts}_${lid}`);
+    writeFileSync(`${base}.jpg`, v.frame.jpeg);
+    writeFileSync(`${base}.json`, JSON.stringify({ lid, bbox: v.verdict.bbox ?? null, confidence: v.verdict.confidence, model: v.model, at: v.frame.recv_ts, source: src }));
+  } catch (e) { log('warn', `live label save failed: ${(e as Error).message}`); }
+}
 let lastRelayAt = 0;
 function cameraMessage(): string { return JSON.stringify({ t: 'camera', ...config.camera }); }
 const logLines: { at: number; level: string; text: string }[] = [];
@@ -132,6 +153,7 @@ function onFrame(source: Source, frame: Frame): void {
 
 detector.onVerdict = (v) => {
   const motion = typeof v.frame.header.motion === 'number' ? v.frame.header.motion : 0;
+  if (!v.model.startsWith('local')) collectLiveLabel(v);
   recentVerdicts.push({ at: v.frame.recv_ts, phase: session.phase, ...v.verdict, motion: +motion.toFixed(3), box_area: +(v.box_area ?? 0).toFixed(3), seen_area: +(v.seen_area ?? 0).toFixed(3), zoomed: Boolean(v.zoomed), latency_ms: Math.round(v.latency_ms), model: v.model, seq: v.frame.header.seq });
   judgedFrames.push(v.frame.jpeg);
   if (recentVerdicts.length > 150) { recentVerdicts.shift(); judgedFrames.shift(); }
@@ -141,6 +163,7 @@ detector.onVerdict = (v) => {
 detector.onError = (model, err) => log('warn', `model error (${model}): ${err.slice(0, 200)}`);
 detector.onVerifier = (v) => {
   const motion = typeof v.frame.header.motion === 'number' ? v.frame.header.motion : 0;
+  collectLiveLabel(v);
   recentVerdicts.push({ at: v.frame.recv_ts, phase: session.phase, ...v.verdict, motion: +motion.toFixed(3), box_area: +(v.box_area ?? 0).toFixed(3), seen_area: +(v.seen_area ?? 0).toFixed(3), zoomed: Boolean(v.zoomed), latency_ms: Math.round(v.latency_ms), model: `${v.model} (verifier)`, seq: v.frame.header.seq });
   judgedFrames.push(v.frame.jpeg);
   if (recentVerdicts.length > 150) { recentVerdicts.shift(); judgedFrames.shift(); }
@@ -359,6 +382,22 @@ const server = http.createServer((req, res) => {
   if (url.pathname === '/api/models') return send(200, JSON.stringify({ candidates: CANDIDATE_MODELS, bench: latestBench(), default_prompt: DEFAULT_PROMPT }));
   if (url.pathname === '/api/log') return send(200, JSON.stringify(logLines));
   if (url.pathname === '/api/verdicts') return send(200, JSON.stringify(recentVerdicts));
+  if (url.pathname === '/api/retrain' && req.method === 'POST') {
+    // Retrain the local classifier in the background with everything in data/live; the head hot-reloads.
+    const { spawn } = require('node:child_process');
+    const liveCount = existsSync(LIVE_DIR) ? readdirSync(LIVE_DIR).filter((f) => f.endsWith('.json')).length : 0;
+    log('info', `retraining the local classifier (${liveCount} live frames)…`);
+    const child = spawn(process.execPath, ['--no-warnings', resolve(ROOT, 'tools', 'train_local.ts')], { cwd: ROOT, stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    child.stdout.on('data', (d: Buffer) => { out += d.toString(); });
+    child.stderr.on('data', (d: Buffer) => { out += d.toString(); });
+    child.on('close', (code: number) => {
+      const acc = out.match(/leave-one-clip-out accuracy: ([\d.]+%)/)?.[1];
+      const live = out.match(/held-out live: (\d+\/\d+)/)?.[1];
+      log(code === 0 ? 'info' : 'error', code === 0 ? `local classifier retrained: ${acc ?? '?'} cross-validated${live ? `, real frames held out ${live}` : ''}` : `retrain failed: ${out.slice(-300)}`);
+    });
+    return send(200, JSON.stringify({ ok: true, live_frames: liveCount }));
+  }
   if (url.pathname === '/api/judged.jpg') {
     const n = Number(url.searchParams.get('n') ?? 0);
     const f = judgedFrames[judgedFrames.length - 1 - n];

@@ -106,7 +106,7 @@ export class Detector {
       this.lastSubmitAt = now;
       void this.evaluateLocal(f);
       // the cloud verifier looks at ~2 frames per second
-      if (this.verifierInflight < 2 && now - this.lastVerifierSubmit >= 450) { this.lastVerifierSubmit = now; void this.evaluate(f, true); }
+      if (this.verifierInflight < 4 && now - this.lastVerifierSubmit >= 250) { this.lastVerifierSubmit = now; void this.evaluate(f, true); }
       return;
     }
     if (this.inflight >= this.config.maxInflight) return;
@@ -127,10 +127,11 @@ export class Detector {
       if (this.zoomEnabled && this.lastBox && Date.now() - this.lastBox.at < 4000 && boxArea(this.lastBox.box) < ZOOM_TRIGGER_AREA) {
         try { crop = cropAround(this.lastBox.box); jpeg = await cropJpeg(frame.jpeg, crop); } catch { crop = null; jpeg = frame.jpeg; }
       }
-      const r = await classifyLocal(jpeg);
+      const r = await classifyLocal(jpeg, 0.65);
       const v: Verdict = { ...r.verdict };
-      // veto: a fresh contradicting opinion from the cloud verifier makes this verdict "uncertain"
-      const fresh = this.verifier && frame.recv_ts - this.verifier.at < 3000;
+      // veto: only a verifier opinion about a frame at most 0.5 s older than this one may contradict it
+      // (the verifier lags ~1 s; an older opinion may describe the world before the lid moved)
+      const fresh = this.verifier && frame.recv_ts - this.verifier.at < 500;
       let vetoed = false;
       if (fresh && v.press_visible && (v.lid === 'open' || v.lid === 'closed') && (this.verifier!.lid === 'open' || this.verifier!.lid === 'closed') && this.verifier!.lid !== v.lid) { v.lid = 'partial'; vetoed = true; }
       if (fresh && this.verifier!.lid === 'none' && v.press_visible && !crop) { v.press_visible = false; v.lid = 'unknown'; vetoed = true; }

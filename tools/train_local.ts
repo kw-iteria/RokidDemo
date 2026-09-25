@@ -12,6 +12,18 @@ import { cropAround, cropJpeg, boxArea } from '../server/src/zoom.ts';
 const args = new Map<string, string>();
 for (let i = 2; i < process.argv.length; i++) if (process.argv[i].startsWith('--')) args.set(process.argv[i].slice(2), process.argv[i + 1] ?? 'true');
 const dump = JSON.parse(readFileSync(resolve(args.get('dump') ?? 'bench-results/bboxes_gpt54.json'), 'utf8')) as { path: string; clip: string; truth: string; verdict: { press_visible: boolean; bbox?: number[] } | null }[];
+// Real frames labelled by the cloud verifier during live use (server writes them to data/live).
+import { existsSync, readdirSync } from 'node:fs';
+const liveDir = resolve(args.get('live') ?? 'data/live');
+if (existsSync(liveDir)) {
+  for (const f of readdirSync(liveDir).filter((x) => x.endsWith('.json')).sort()) {
+    const meta = JSON.parse(readFileSync(resolve(liveDir, f), 'utf8'));
+    const jpg = resolve(liveDir, f.replace('.json', '.jpg'));
+    if (!existsSync(jpg)) continue;
+    dump.push({ path: jpg, clip: 'live', truth: meta.lid, verdict: { press_visible: meta.lid !== 'none', bbox: meta.bbox ?? undefined } });
+  }
+  console.log(`live frames: ${dump.filter((d) => d.clip === 'live').length}`);
+}
 
 interface Sample { x: Float32Array; y: string; clip: string; kind: string }
 const samples: Sample[] = [];

@@ -79,6 +79,7 @@ export class PressSession {
   /** Recent accepted verdicts (newest last) for window votes. */
   private window: { ts: number; lid: string; hand: boolean; far: boolean }[] = [];
   private farSince = 0;
+  private rollbackVotes = 0;
   private lastSeenTs = 0;
   private lastVerdict: VerdictEvent | null = null;
   private lastAcceptedFrameTs = 0;
@@ -108,6 +109,7 @@ export class PressSession {
     this.streakState = null;
     this.streakCount = 0;
     if (p !== 'COUNTDOWN') this.countdown = null;
+    this.rollbackVotes = 0;
     this.emit(true);
   }
 
@@ -212,6 +214,20 @@ export class PressSession {
           this.countdown = { started_at, ends_at: started_at + this.params.countdown_ms, duration_ms: this.params.countdown_ms };
           this.log(`closed detected: ${c.count} agreeing verdicts over ${ev.frame_ts - c.firstTs} ms, none contradicting (model latency ${Math.round(ev.latency_ms)} ms, backdated ${Date.now() - started_at} ms)`);
           this.setPhase('COUNTDOWN', started_at);
+        }
+        break;
+      }
+      case 'COUNTDOWN': {
+        // Safety net for the fast local path: if within the first 3 s the (slower, more accurate) verdicts
+        // say the press is open twice, the close was a misread: cancel the countdown.
+        if (this.countdown && ev.frame_ts - this.countdown.started_at < 3000 && ev.model.startsWith('gpt') && lid === 'open' && v.confidence >= 0.8) {
+          this.rollbackVotes++;
+          if (this.rollbackVotes >= 2) {
+            this.rollbackVotes = 0;
+            this.countdown = null;
+            this.log('countdown cancelled: the press was not closed');
+            this.setPhase('AWAIT_CLOSE', ev.frame_ts);
+          }
         }
         break;
       }

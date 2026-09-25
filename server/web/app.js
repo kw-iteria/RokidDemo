@@ -326,6 +326,7 @@
   $('btn-stop').onclick = () => cmd({ cmd: 'stop' });
   const refreshRefs = () => { const t = Date.now(); $('ref-open').src = `/refs/open.jpg?${t}`; $('ref-closed').src = `/refs/closed.jpg?${t}`; };
   $('btn-ref-open').onclick = () => { cmd({ cmd: 'set_reference', kind: 'open' }); setTimeout(refreshRefs, 400); };
+  $('btn-retrain').onclick = async (e) => { e.target.disabled = true; const r = await fetch('/api/retrain', { method: 'POST' }); const j = await r.json(); e.target.textContent = `Retraining on ${j.live_frames} real frames…`; setTimeout(() => { e.target.disabled = false; e.target.textContent = 'Retrain local classifier'; }, 90000); };
   $('btn-ref-closed').onclick = () => { cmd({ cmd: 'set_reference', kind: 'closed' }); setTimeout(refreshRefs, 400); };
 
   // ------------------------------------------------------------------ webcam source (this computer's camera acts like the glasses)
