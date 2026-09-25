@@ -112,13 +112,9 @@
     </label>
   </div>
   <div class="row actions">
-    <button id="btn-start" class="primary">Start workflow</button>
-    <button id="btn-stop">Stop</button>
-    <button id="btn-replay">Replay demo clip</button>
-    <button id="btn-webcam">Use this computer's camera</button>
     <button id="btn-sound" aria-pressed="true">Sound on</button>
     <button id="btn-voice" aria-pressed="true">Voice on</button>
-    <button id="btn-prompt">Edit prompt</button>
+    <button id="btn-retrain" title="Retrain the local classifier on the real frames collected so far">Retrain local classifier</button>
     <span id="hosts" class="hosts"></span>
   </div>
   <div class="row">
@@ -159,18 +155,7 @@
     </label>
     <span class="muted">Changes apply live on the glasses (app 0.2 or newer).</span>
   </div>
-  <div class="row refs">
-    <span class="muted">Reference photos of the press (what "open" and "closed" look like):</span>
-    <figure><img id="ref-open" src="/refs/open.jpg" alt="reference: open"><figcaption>open</figcaption></figure>
-    <figure><img id="ref-closed" src="/refs/closed.jpg" alt="reference: closed"><figcaption>closed</figcaption></figure>
-    <button id="btn-ref-open">Capture open from live view</button>
-    <button id="btn-ref-closed">Capture closed from live view</button>
-    <button id="btn-retrain" title="Retrain the local classifier on the real frames collected so far">Retrain local classifier</button>
-  </div>
-  <div id="prompt-box" class="prompt-box" hidden>
-    <textarea id="prompt" rows="8" spellcheck="false"></textarea>
-    <div class="row"><button id="btn-prompt-save" class="primary">Save prompt</button><button id="btn-prompt-reset">Reset to default</button></div>
-  </div>
+
   <ol id="log" class="log"></ol>
 </section>
 

@@ -5,23 +5,27 @@ import { resolve } from 'node:path';
 import type { LidState, Verdict } from './vision.ts';
 
 export const HEAD_FILE = resolve(import.meta.dirname, '..', 'model', 'press_head.json');
-export const CLIP_MODEL = 'Xenova/clip-vit-base-patch32';
+export const CLIP_MODEL = process.env.LOCAL_EMBEDDER ?? 'Xenova/clip-vit-base-patch32';
 
-export interface Head { classes: string[]; W: number[][]; b: number[]; dim: number; trained_at?: string; cv_accuracy?: number }
+export interface Head { classes: string[]; W: number[][]; b: number[]; dim: number; trained_at?: string; cv_accuracy?: number; embedder?: string; real_accuracy?: number }
 
 let extractor: any = null;
+let extractorModel = '';
 let loading: Promise<any> | null = null;
 let head: Head | null = null;
 let headMtime = 0;
 
 export function localAvailable(): boolean { return existsSync(HEAD_FILE); }
 
-export async function loadExtractor(): Promise<any> {
-  if (extractor) return extractor;
-  if (!loading) {
+export async function loadExtractor(model?: string): Promise<any> {
+  const want = model ?? loadHead()?.embedder ?? CLIP_MODEL;
+  if (extractor && extractorModel === want) return extractor;
+  if (!loading || extractorModel !== want) {
+    extractorModel = want;
     loading = import('@huggingface/transformers').then(async (T) => {
-      extractor = await T.pipeline('image-feature-extraction', CLIP_MODEL, { dtype: 'fp32' });
+      extractor = await T.pipeline('image-feature-extraction', want, { dtype: 'fp32' });
       (extractor as any).__T = T;
+      (extractor as any).__model = want;
       return extractor;
     });
   }
@@ -35,11 +39,11 @@ export function loadHead(): Head | null {
   return head;
 }
 
-export async function embed(jpeg: Buffer): Promise<Float32Array> {
-  const ex = await loadExtractor();
+export async function embed(jpeg: Buffer, model?: string): Promise<Float32Array> {
+  const ex = await loadExtractor(model);
   const T = ex.__T;
   const img = await T.RawImage.fromBlob(new Blob([jpeg], { type: 'image/jpeg' }));
-  const out = await ex(img, { pooling: 'mean', normalize: true });
+  const out = await ex(img, { pooling: /dinov2/i.test(ex.__model) ? 'cls' : 'mean', normalize: true });
   return Float32Array.from(out.data as Float32Array);
 }
 

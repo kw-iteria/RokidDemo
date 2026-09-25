@@ -109,7 +109,7 @@
     els.dwell.value = Math.round(msg.config.params.countdown_ms / 1000);
     els.settle.value = msg.config.params.settle_ms ?? 700;
     els.handfree.value = String(msg.config.params.hand_free_close ?? true);
-    if (document.activeElement !== els.prompt) els.prompt.value = msg.config.prompt;
+    if (els.prompt && document.activeElement !== els.prompt) els.prompt.value = msg.config.prompt;
   }
 
   function onVerdict(v) {
@@ -248,7 +248,7 @@
     el.addEventListener('change', pushCamera);
   }
   let replaying = false;
-  $('btn-replay').onclick = (e) => { replaying = !replaying; cmd({ cmd: 'replay', action: replaying ? 'start' : 'stop', loop: false, fps: 6 }); e.target.textContent = replaying ? 'Stop replay' : 'Replay demo clip'; };
+  if ($('btn-replay')) $('btn-replay').onclick = (e) => { replaying = !replaying; cmd({ cmd: 'replay', action: replaying ? 'start' : 'stop', loop: false, fps: 6 }); e.target.textContent = replaying ? 'Stop replay' : 'Replay demo clip'; };
   $('btn-sound').onclick = (e) => { state.sound = !state.sound; e.target.setAttribute('aria-pressed', String(state.sound)); e.target.textContent = state.sound ? 'Sound on' : 'Sound off'; if (state.sound) beep(660, 80); };
   $('btn-voice').onclick = (e) => { state.voice = !state.voice; e.target.setAttribute('aria-pressed', String(state.voice)); e.target.textContent = state.voice ? 'Voice on' : 'Voice off'; if (!state.voice) playPcm({ stop: true }, new Uint8Array(0)); };
   for (const el of [els.voiceName, els.voiceSpeed, els.voiceEnabled]) {
@@ -256,9 +256,9 @@
     el.addEventListener('blur', () => (state.editing = false));
     el.addEventListener('change', () => cmd({ cmd: 'set', config: { voice: { enabled: els.voiceEnabled.value === 'true', voice: els.voiceName.value, speed: Number(els.voiceSpeed.value) } } }));
   }
-  $('btn-prompt').onclick = () => { els.promptBox.hidden = !els.promptBox.hidden; };
-  $('btn-prompt-save').onclick = () => cmd({ cmd: 'set', config: { prompt: els.prompt.value } });
-  $('btn-prompt-reset').onclick = () => { els.prompt.value = state.defaultPrompt; cmd({ cmd: 'set', config: { prompt: state.defaultPrompt } }); };
+  if ($('btn-prompt')) $('btn-prompt').onclick = () => { els.promptBox.hidden = !els.promptBox.hidden; };
+  if ($('btn-prompt-save')) $('btn-prompt-save').onclick = () => cmd({ cmd: 'set', config: { prompt: els.prompt.value } });
+  if ($('btn-prompt-reset')) $('btn-prompt-reset').onclick = () => { els.prompt.value = state.defaultPrompt; cmd({ cmd: 'set', config: { prompt: state.defaultPrompt } }); };
 
   // ------------------------------------------------------------------ chat
   const CHAT_MODELS = ['groq/openai/gpt-oss-20b', 'groq/openai/gpt-oss-120b', 'groq/qwen/qwen3.8-27b', 'cerebras/gpt-oss-120b', 'cerebras/qwen-3.8-27b', 'gpt-5.4-nano', 'gpt-5.4-mini', 'gpt-4.1-nano', 'gpt-4.1-mini', 'gpt-4o-mini', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'xai/grok-4.20-0309-non-reasoning'];
@@ -322,16 +322,11 @@
     rec.onerror = () => { rec = null; els.mic.setAttribute('aria-pressed', 'false'); els.mic.textContent = 'Mic'; };
     rec.start();
   };
-  $('btn-start').onclick = () => cmd({ cmd: 'start' });
-  $('btn-stop').onclick = () => cmd({ cmd: 'stop' });
-  const refreshRefs = () => { const t = Date.now(); $('ref-open').src = `/refs/open.jpg?${t}`; $('ref-closed').src = `/refs/closed.jpg?${t}`; };
-  $('btn-ref-open').onclick = () => { cmd({ cmd: 'set_reference', kind: 'open' }); setTimeout(refreshRefs, 400); };
   $('btn-retrain').onclick = async (e) => { e.target.disabled = true; const r = await fetch('/api/retrain', { method: 'POST' }); const j = await r.json(); e.target.textContent = `Retraining on ${j.live_frames} real frames…`; setTimeout(() => { e.target.disabled = false; e.target.textContent = 'Retrain local classifier'; }, 90000); };
-  $('btn-ref-closed').onclick = () => { cmd({ cmd: 'set_reference', kind: 'closed' }); setTimeout(refreshRefs, 400); };
 
   // ------------------------------------------------------------------ webcam source (this computer's camera acts like the glasses)
   let camWs = null, camTimer = null;
-  $('btn-webcam').onclick = async (e) => {
+  if ($('btn-webcam')) $('btn-webcam').onclick = async (e) => {
     if (camWs) { clearInterval(camTimer); camWs.close(); camWs = null; e.target.textContent = "Use this computer's camera"; return; }
     const video = $('webcam-video'); const canvas = $('webcam-canvas');
     const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 360 }, audio: false });

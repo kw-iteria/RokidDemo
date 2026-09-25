@@ -6,11 +6,15 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import sharp from 'sharp';
-import { embed, HEAD_FILE, predict, type Head } from '../server/src/local.ts';
+import { embed as embedWith, HEAD_FILE, predict, type Head } from '../server/src/local.ts';
 import { cropAround, cropJpeg, cropTight, boxArea } from '../server/src/zoom.ts';
 
 const args = new Map<string, string>();
 for (let i = 2; i < process.argv.length; i++) if (process.argv[i].startsWith('--')) args.set(process.argv[i].slice(2), process.argv[i + 1] ?? 'true');
+const EMBEDDER = args.get('model') ?? process.env.LOCAL_EMBEDDER ?? 'Xenova/clip-vit-base-patch32';
+const embed = (jpeg: Buffer) => embedWith(jpeg, EMBEDDER);
+const dryRun = args.get('dry') === 'true'; // evaluate only, do not overwrite the head
+console.log('embedder:', EMBEDDER);
 type DumpRow = { path: string; clip: string; truth: string; verdict: { press_visible: boolean; bbox?: number[] } | null };
 // one or more cloud-verdict dumps (comma separated): frames + bounding boxes
 const dump: DumpRow[] = [];
@@ -111,6 +115,7 @@ for (const held of clips) {
 }
 const acc = correct / total;
 console.log(`leave-one-clip-out accuracy: ${(acc * 100).toFixed(1)}% (${correct}/${total})`);
+let realAcc: number | undefined;
 // In-domain estimate for the real setup: 5-fold over the real glasses frames (live + far clips),
 // each fold trained on all other samples. This is what to watch as more live frames accumulate.
 const isReal = (s: Sample) => s.clip === 'live' || /far/.test(s.clip);
@@ -124,14 +129,17 @@ if (real.length >= 20) {
     for (const s of test) { const { label } = predict(h, s.x); rt++; if (label === s.y) rc++; rconf[s.y] = rconf[s.y] ?? {}; rconf[s.y][label] = (rconf[s.y][label] ?? 0) + 1; }
   }
   const oc = real.filter((s) => s.y === 'open' || s.y === 'closed');
+  realAcc = +(rc / rt).toFixed(4);
   console.log(`real-frames 5-fold accuracy: ${((rc / rt) * 100).toFixed(1)}% (${rc}/${rt}); confusion ${JSON.stringify(rconf)}`);
 }
 for (const c of CLASSES) if (perClass[c]) console.log(`  ${c.padEnd(8)} ${perClass[c][0]}/${perClass[c][1]}  confusion: ${JSON.stringify(confusion[c])}`);
 // strict: open vs closed only
 const oc = samples.filter((s) => s.y === 'open' || s.y === 'closed');
 const final = train(samples);
-final.trained_at = new Date().toISOString(); final.cv_accuracy = +acc.toFixed(4);
-mkdirSync(dirname(HEAD_FILE), { recursive: true });
-writeFileSync(HEAD_FILE, JSON.stringify(final));
-console.log('saved', HEAD_FILE, 'trained on', samples.length, 'samples;', oc.length, 'open/closed');
+final.trained_at = new Date().toISOString(); final.cv_accuracy = +acc.toFixed(4); final.embedder = EMBEDDER; final.real_accuracy = realAcc;
+if (!dryRun) {
+  mkdirSync(dirname(HEAD_FILE), { recursive: true });
+  writeFileSync(HEAD_FILE, JSON.stringify(final));
+  console.log('saved', HEAD_FILE, 'trained on', samples.length, 'samples;', oc.length, 'open/closed');
+} else console.log('dry run: head not saved');
 process.exit(0);
