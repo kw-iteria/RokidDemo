@@ -12,6 +12,7 @@ export interface Verdict {
   lid: LidState;
   confidence: number; // 0..1
   hand_on_press?: boolean; // a hand is touching / holding / moving the press
+  bbox?: [number, number, number, number]; // press location in the image the model saw, normalized 0..1 (x0,y0,x1,y1)
 }
 
 export interface ClassifyOptions {
@@ -40,7 +41,8 @@ Rules:
 - press_visible is true ONLY when this specific box is clearly in the live frame. Hands, phones, laptops, keyboards, papers, cups, bottles, other boxes, cases, containers, furniture, walls or an empty table are NOT the press: then press_visible is false and lid is "unknown".
 - lid: "closed" ONLY when the lid lies completely flat on the base with no gap, no tilt and no hand holding it, so the box is one flat closed block; "open" when the lid is raised so the inside of the box is visible; "partial" whenever the lid is tilted, has a gap, is being moved, or a hand is pressing or holding it; "unknown" when the press is not visible. When in doubt between closed and partial, answer "partial".
 - hand_on_press: true if a hand or fingers touch, hold or move the press.
-- confidence (0 to 1) is how sure you are of BOTH press_visible and lid. Use 0.4 or less whenever you are guessing.
+- bbox: the press's bounding box in the LIVE frame as fractions of the image width/height, [x0, y0, x1, y1] with 0,0 at the top-left; use [0,0,0,0] when it is not visible.
+- confidence (0 to 1) is how sure you are of BOTH press_visible and lid. Use 0.4 or less whenever you are guessing, and never above 0.6 when the press is small or far away in the frame.
 Answer with the JSON object only.`;
 
 const JSON_SCHEMA = {
@@ -49,9 +51,10 @@ const JSON_SCHEMA = {
     press_visible: { type: 'boolean' },
     lid: { type: 'string', enum: ['open', 'closed', 'partial', 'unknown'] },
     hand_on_press: { type: 'boolean' },
+    bbox: { type: 'array', items: { type: 'number' } },
     confidence: { type: 'number' },
   },
-  required: ['press_visible', 'lid', 'hand_on_press', 'confidence'],
+  required: ['press_visible', 'lid', 'hand_on_press', 'bbox', 'confidence'],
   additionalProperties: false,
 } as const;
 
@@ -61,10 +64,11 @@ const GEMINI_SCHEMA = {
     press_visible: { type: 'BOOLEAN' },
     lid: { type: 'STRING', enum: ['open', 'closed', 'partial', 'unknown'] },
     hand_on_press: { type: 'BOOLEAN' },
+    bbox: { type: 'ARRAY', items: { type: 'NUMBER' } },
     confidence: { type: 'NUMBER' },
   },
-  required: ['press_visible', 'lid', 'hand_on_press', 'confidence'],
-  propertyOrdering: ['press_visible', 'lid', 'hand_on_press', 'confidence'],
+  required: ['press_visible', 'lid', 'hand_on_press', 'bbox', 'confidence'],
+  propertyOrdering: ['press_visible', 'lid', 'hand_on_press', 'bbox', 'confidence'],
 };
 
 /**
@@ -151,6 +155,7 @@ function parseVerdict(text: string): Verdict {
     lid: (['open', 'closed', 'partial', 'unknown'] as LidState[]).includes(lid as LidState) ? (lid as LidState) : 'unknown',
     confidence: Math.max(0, Math.min(1, Number(obj.confidence ?? 0.5))),
     hand_on_press: obj.hand_on_press === undefined ? undefined : Boolean(obj.hand_on_press),
+    bbox: Array.isArray(obj.bbox) && obj.bbox.length === 4 && obj.bbox.every((n: unknown) => typeof n === 'number') ? (obj.bbox.map((n: number) => Math.max(0, Math.min(1, n))) as [number, number, number, number]) : undefined,
   };
 }
 

@@ -2,6 +2,7 @@
 // optionally racing several models per frame and taking the first valid verdict.
 import { classifyFrame, type ClassifyResult, type Verdict } from './vision.ts';
 import type { Frame } from './frames.ts';
+import { boxArea, cropAround, cropJpeg, uncrop, ZOOM_TRIGGER_AREA, type Crop } from './zoom.ts';
 
 export interface DetectorConfig {
   models: string[];        // 1 model, or several: raced per frame, or primary + fallbacks (mode)
@@ -14,11 +15,14 @@ export interface DetectorConfig {
 }
 
 export interface VerdictOut {
-  verdict: Verdict;
+  verdict: Verdict;      // bbox in full-frame coordinates
   frame: Frame;
   latency_ms: number;
   model: string;
   losers?: string[];
+  zoomed?: Crop;         // the crop the model actually looked at, if any
+  box_area?: number;     // press size as a fraction of the full frame
+  seen_area?: number;    // press size as a fraction of the image the model looked at (crop or full frame)
 }
 
 export interface DetectorStats {
@@ -54,6 +58,10 @@ export class Detector {
   private completed = 0;
   private running = false;
   private perModel = new Map<string, { wins: number; lat: number[]; errors: number }>();
+  /** Last known press location (full-frame, normalized) and when it was seen; drives the zoom crop. */
+  private lastBox: { box: [number, number, number, number]; at: number } | null = null;
+  private zoomMisses = 0;
+  zoomEnabled = true;
   onVerdict: (v: VerdictOut) => void = () => {};
   onError: (model: string, error: string) => void = () => {};
 
@@ -97,13 +105,19 @@ export class Detector {
     const t0 = performance.now();
     const ac = new AbortController();
     const models = this.config.models.length ? this.config.models : ['gemini-3.1-flash-lite'];
+    // Zoom: if the press was small recently, look at a crop around it (every 4th request sees the full frame to re-acquire).
+    let crop: Crop | null = null;
+    let jpeg = frame.jpeg;
+    if (this.zoomEnabled && this.lastBox && Date.now() - this.lastBox.at < 4000 && boxArea(this.lastBox.box) < ZOOM_TRIGGER_AREA && this.submitted % 4 !== 0) {
+      try { crop = cropAround(this.lastBox.box); jpeg = await cropJpeg(frame.jpeg, crop); } catch { crop = null; jpeg = frame.jpeg; }
+    }
     try {
       const attempt = async (m: string) => {
         const now = Date.now();
         if ((this.coolDownUntil.get(m) ?? 0) > now) throw new Error(`${m}: cooling down after rate limit`);
         const pace = MODEL_PACE_MS[m.split('/')[0]] ?? 0;
         if (pace) { const wait = (this.lastStartByModel.get(m) ?? 0) + pace - now; if (wait > 0) await new Promise((r) => setTimeout(r, wait)); this.lastStartByModel.set(m, Date.now()); }
-        const r = await classifyFrame(m, frame.jpeg, { prompt: this.config.prompt, signal: ac.signal, timeoutMs: this.config.timeoutMs, refs: this.config.refs });
+        const r = await classifyFrame(m, jpeg, { prompt: this.config.prompt, signal: ac.signal, timeoutMs: this.config.timeoutMs, refs: this.config.refs });
         if (!r.verdict) {
           if (r.error !== 'aborted') { const pm = this.perModel.get(m) ?? { wins: 0, lat: [], errors: 0 }; pm.errors++; this.perModel.set(m, pm); }
           if (/429|too many|quota/i.test(r.error ?? '')) this.coolDownUntil.set(m, Date.now() + COOL_DOWN_MS);
@@ -131,7 +145,21 @@ export class Detector {
       if (this.latencies.length > 40) this.latencies.shift();
       this.completed++;
       this.completions.push(Date.now());
-      this.onVerdict({ verdict: winner.verdict, frame, latency_ms, model: winner.model, losers: models.filter((m) => m !== winner.model) });
+      // Map the box back to full-frame coordinates and remember it for the next zoom.
+      const v: Verdict = { ...winner.verdict };
+      const seenArea = v.press_visible && v.bbox ? boxArea(v.bbox) : 0;
+      if (v.press_visible && v.bbox && boxArea(v.bbox) > 0) {
+        v.bbox = crop ? uncrop(v.bbox, crop) : v.bbox;
+        this.lastBox = { box: v.bbox, at: frame.recv_ts };
+        this.zoomMisses = 0;
+      } else if (crop) {
+        // not found inside the crop: widen next time, forget after a few misses
+        if (++this.zoomMisses >= 2) this.lastBox = null;
+        v.bbox = undefined;
+      } else {
+        v.bbox = undefined;
+      }
+      this.onVerdict({ verdict: v, frame, latency_ms, model: winner.model, losers: models.filter((m) => m !== winner.model), zoomed: crop ?? undefined, box_area: v.bbox ? boxArea(v.bbox) : 0, seen_area: seenArea });
     } catch (e) {
       this.errors++;
       const err = e as AggregateError;

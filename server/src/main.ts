@@ -41,7 +41,7 @@ interface AppConfig {
 const config: AppConfig = {
   models: (process.env.PRESS_MODELS ?? 'gpt-5.4-mini,gpt-4.1-mini').split(',').map((s) => s.trim()).filter(Boolean),
   mode: (process.env.PRESS_MODE as 'race' | 'primary') ?? 'primary',
-  camera: { rotation: 0, mirror: false, longEdge: 480, fps: 6, aspect: 'native' },
+  camera: { rotation: 0, mirror: false, longEdge: 720, fps: 6, aspect: 'native' },
   chatFast: process.env.CHAT_FAST_MODEL ?? 'groq/qwen/qwen3.8-27b',
   chatVision: process.env.CHAT_VISION_MODEL ?? 'gpt-4.1-mini',
   voice: { ...DEFAULT_VOICE },
@@ -131,11 +131,11 @@ function onFrame(source: Source, frame: Frame): void {
 
 detector.onVerdict = (v) => {
   const motion = typeof v.frame.header.motion === 'number' ? v.frame.header.motion : 0;
-  recentVerdicts.push({ at: v.frame.recv_ts, phase: session.phase, ...v.verdict, motion: +motion.toFixed(3), latency_ms: Math.round(v.latency_ms), model: v.model, seq: v.frame.header.seq });
+  recentVerdicts.push({ at: v.frame.recv_ts, phase: session.phase, ...v.verdict, motion: +motion.toFixed(3), box_area: +(v.box_area ?? 0).toFixed(3), seen_area: +(v.seen_area ?? 0).toFixed(3), zoomed: Boolean(v.zoomed), latency_ms: Math.round(v.latency_ms), model: v.model, seq: v.frame.header.seq });
   judgedFrames.push(v.frame.jpeg);
   if (recentVerdicts.length > 150) { recentVerdicts.shift(); judgedFrames.shift(); }
-  session.onVerdict({ verdict: v.verdict, frame_ts: v.frame.recv_ts, latency_ms: v.latency_ms, model: v.model, seq: v.frame.header.seq, motion });
-  broadcast(JSON.stringify({ t: 'verdict', ...v.verdict, motion: +motion.toFixed(3), latency_ms: Math.round(v.latency_ms), model: v.model, seq: v.frame.header.seq, frame_ts: v.frame.recv_ts, server_now: Date.now() }));
+  session.onVerdict({ verdict: v.verdict, frame_ts: v.frame.recv_ts, latency_ms: v.latency_ms, model: v.model, seq: v.frame.header.seq, motion, box_area: v.seen_area });
+  broadcast(JSON.stringify({ t: 'verdict', ...v.verdict, motion: +motion.toFixed(3), box_area: +(v.box_area ?? 0).toFixed(3), zoomed: Boolean(v.zoomed), latency_ms: Math.round(v.latency_ms), model: v.model, seq: v.frame.header.seq, frame_ts: v.frame.recv_ts, server_now: Date.now() }));
 };
 detector.onError = (model, err) => log('warn', `model error (${model}): ${err.slice(0, 200)}`);
 session.onChange((snap, changed) => { if (changed) { log('info', `phase → ${snap.phase}`); broadcastState(); } });

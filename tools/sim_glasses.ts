@@ -29,10 +29,13 @@ function audioEnvelope(pcm: Buffer): Buffer {
   const h = Buffer.from(JSON.stringify({ t: 'audio', rate: 16000, ts: Date.now() }));
   const b = Buffer.alloc(2 + h.length + pcm.length); b.writeUInt16BE(h.length, 0); h.copy(b, 2); pcm.copy(b, 2 + h.length); return b;
 }
-const dir = resolve('bench-results/sim_frames');
+// SIM_CLIP=assets/other.mp4 SIM_SCALE=720 to stream a different clip / frame size
+const clip = process.env.SIM_CLIP ?? 'assets/press_demo_640.mp4';
+const scale = process.env.SIM_SCALE ?? '480';
+const dir = resolve('bench-results', `sim_frames_${clip.replace(/[^a-z0-9]/gi, '_')}_${scale}`);
 if (!existsSync(dir)) {
   mkdirSync(dir, { recursive: true });
-  execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', resolve('assets/press_demo_640.mp4'), '-vf', 'fps=6,scale=480:-2', '-q:v', '6', resolve(dir, 'f_%04d.jpg')]);
+  execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', resolve(clip), '-vf', `fps=6,scale=${scale}:-2`, '-q:v', '6', resolve(dir, 'f_%04d.jpg')]);
 }
 const files = readdirSync(dir).filter((f) => f.endsWith('.jpg')).sort();
 const ws = new WebSocket(`${base}/ws/glasses`);

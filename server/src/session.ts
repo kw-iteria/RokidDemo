@@ -6,7 +6,8 @@ export type Phase = 'IDLE' | 'SEARCHING' | 'AWAIT_CLOSE' | 'COUNTDOWN' | 'AWAIT_
 export interface SessionParams {
   countdown_ms: number;      // press dwell time
   confirmations: number;     // consecutive agreeing verdicts needed for a transition
-  settle_ms: number;         // a CLOSE also needs the closed streak to span at least this long (lid at rest)
+  settle_ms: number;         // a transition needs agreeing verdicts spanning at least this long (lid at rest)
+  min_box_area: number;      // press must cover at least this fraction of the frame to count (else "move closer")
   motion_max: number;        // verdicts on frames with more motion than this do not count toward a streak
   hand_free_close: boolean;  // a CLOSE also needs no hand on the press in the confirming verdicts
   fast_confidence: number;   // a single verdict at/above this confidence is enough
@@ -18,7 +19,8 @@ export interface SessionParams {
 export const DEFAULT_PARAMS: SessionParams = {
   countdown_ms: 10_000,
   confirmations: 2,
-  settle_ms: 700,
+  settle_ms: 1000,
+  min_box_area: 0.02,
   motion_max: 0.5,        // a head-mounted camera moves a lot; only clearly blurred/moving frames are skipped
   hand_free_close: true,
   fast_confidence: 1.01,   // >1 disables the single-verdict shortcut
@@ -34,6 +36,7 @@ export interface VerdictEvent {
   model: string;
   seq: number;
   motion?: number;    // 0..1 frame-to-frame motion of the source at that frame
+  box_area?: number;  // press size as a fraction of the frame (0 = unknown)
 }
 
 export interface SessionSnapshot {
@@ -73,6 +76,9 @@ export class PressSession {
   private openSeen = 0;      // open verdicts seen this run (a close is only accepted after the box was seen open)
   private visibleStreakState: string | null = null;
   private visibleStreakCount = 0;
+  /** Recent accepted verdicts (newest last) for window votes. */
+  private window: { ts: number; lid: string; hand: boolean; far: boolean }[] = [];
+  private farSince = 0;
   private lastSeenTs = 0;
   private lastVerdict: VerdictEvent | null = null;
   private lastAcceptedFrameTs = 0;
@@ -118,6 +124,8 @@ export class PressSession {
     this.lastVerdict = null;
     this.lastSeenTs = 0;
     this.openSeen = 0;
+    this.window = [];
+    this.farSince = 0;
     this.log(`run ${this.run} started`);
     this.phase = 'IDLE';
     this.setPhase('SEARCHING');
@@ -152,52 +160,67 @@ export class PressSession {
     const v = ev.verdict;
     if (v.press_visible && v.lid !== 'unknown') this.lastSeenTs = ev.frame_ts;
 
-    // Streak tracking: only strictly consecutive identical verdicts count. Anything else
-    // (partial, unknown, not visible, the other state) restarts the streak.
+    // Window vote: a transition needs a clean run of agreeing verdicts over `settle_ms`, with no
+    // contradicting verdict in that window. Frames where the camera moved a lot are ignored, and
+    // frames where the press is tiny (far away) never confirm anything.
     const moving = (ev.motion ?? 0) > this.params.motion_max;
-    if (moving && v.press_visible && (v.lid === 'open' || v.lid === 'closed')) { this.emit(false); return; } // blurred / camera moving: neither confirms nor breaks a streak
-    const s = !v.press_visible ? 'unknown' : v.lid;
+    const far = ev.box_area !== undefined && ev.box_area > 0 && ev.box_area < this.params.min_box_area;
+    if (v.press_visible && v.lid !== 'unknown' && far) this.farSince = this.farSince || ev.frame_ts; else if (v.press_visible && !far) this.farSince = 0;
+    const lid = !v.press_visible ? 'none' : v.lid;
+    if (!(moving && v.press_visible)) {
+      this.window.push({ ts: ev.frame_ts, lid, hand: Boolean(v.hand_on_press), far });
+      const keepFrom = ev.frame_ts - Math.max(this.params.settle_ms, 1500) * 2;
+      this.window = this.window.filter((w) => w.ts >= keepFrom);
+      if (lid === 'open' && !far) this.openSeen++;
+    }
     const visibleState = v.press_visible && v.confidence >= 0.5 ? 'visible' : 'none';
-    if (this.streakState === s) { this.streakCount++; this.streakLastTs = ev.frame_ts; }
-    else { this.streakState = s; this.streakCount = 1; this.streakFirstTs = ev.frame_ts; this.streakLastTs = ev.frame_ts; this.handFreeCount = 0; }
-    if (v.hand_on_press) this.handFreeCount = 0;
-    else { if (this.handFreeCount === 0) this.handFreeSince = ev.frame_ts; this.handFreeCount++; }
-    if (v.press_visible && v.lid === 'open') this.openSeen++;
     if (this.visibleStreakState === visibleState) this.visibleStreakCount++;
     else { this.visibleStreakState = visibleState; this.visibleStreakCount = 1; }
-    const confirmed = (state: 'open' | 'closed') =>
-      this.streakState === state && (this.streakCount >= this.params.confirmations || (this.streakCount >= 1 && v.confidence >= this.params.fast_confidence));
+
+    /**
+     * Look back `span` ms (longer than the settle time): every verdict in that span must be `state`
+     * (or a harmless partial/none minority), the oldest agreeing one must be at least `settle` ms old,
+     * and none of them may have seen the press tiny.
+     */
+    const vote = (state: 'open' | 'closed', settle: number) => {
+      const span = Math.max(settle * 1.6, settle + 600);
+      const from = ev.frame_ts - span;
+      const recent = this.window.filter((w) => w.ts >= from);
+      const agree = recent.filter((w) => w.lid === state);
+      const contradict = recent.filter((w) => w.lid === (state === 'open' ? 'closed' : 'open'));
+      const anyFar = agree.some((w) => w.far);
+      const firstAgree = agree[0]?.ts ?? 0;
+      const handFree = agree.length > 0 && agree.slice(-this.params.confirmations).every((w) => !w.hand);
+      const ok = agree.length >= this.params.confirmations && contradict.length === 0 && !anyFar && agree.length >= recent.length * 0.6 && ev.frame_ts - firstAgree >= settle;
+      return { ok, count: agree.length, firstTs: firstAgree, handFree };
+    };
+    // keep the old streak fields roughly meaningful for the diagnostics line
+    if (this.streakState === lid) { this.streakCount++; this.streakLastTs = ev.frame_ts; } else { this.streakState = lid; this.streakCount = 1; this.streakFirstTs = ev.frame_ts; this.streakLastTs = ev.frame_ts; this.handFreeCount = 0; }
+    if (v.hand_on_press) this.handFreeCount = 0; else { if (this.handFreeCount === 0) this.handFreeSince = ev.frame_ts; this.handFreeCount++; }
 
     switch (this.phase) {
       case 'SEARCHING':
         if (this.visibleStreakState === 'visible' && this.visibleStreakCount >= this.params.confirmations) this.setPhase('AWAIT_CLOSE', ev.frame_ts);
         break;
-      case 'AWAIT_CLOSE':
-        // A close counts only after the box was seen open in this run (the closing is observed), or,
-        // if it was already closed from the start, after a long unbroken closed streak.
-        {
-          const handFree = !this.params.hand_free_close || this.handFreeCount >= this.params.confirmations;
-          const longClosed = this.streakCount >= this.params.confirmations * 4; // hand stays on the lid: accept after a long unbroken closed streak
-          const restSince = handFree && this.params.hand_free_close ? this.handFreeSince : this.streakFirstTs;
-          if (
-            confirmed('closed') &&
-            (this.openSeen >= this.params.confirmations || longClosed) &&
-            (handFree || longClosed) &&
-            this.streakLastTs - restSince >= this.params.settle_ms
-          ) {
-          const started_at = this.params.backdate ? restSince : Date.now();
+      case 'AWAIT_CLOSE': {
+        const c = vote('closed', this.params.settle_ms);
+        const longClosed = vote('closed', 2500);
+        if (c.ok && (this.openSeen >= this.params.confirmations || longClosed.ok) && (c.handFree || !this.params.hand_free_close || longClosed.ok)) {
+          const started_at = this.params.backdate ? c.firstTs : Date.now();
           this.countdown = { started_at, ends_at: started_at + this.params.countdown_ms, duration_ms: this.params.countdown_ms };
-          this.log(`closed detected after ${this.streakCount} verdicts over ${this.streakLastTs - this.streakFirstTs} ms (model latency ${Math.round(ev.latency_ms)} ms, backdated ${Date.now() - started_at} ms)`);
+          this.log(`closed detected: ${c.count} agreeing verdicts over ${ev.frame_ts - c.firstTs} ms, none contradicting (model latency ${Math.round(ev.latency_ms)} ms, backdated ${Date.now() - started_at} ms)`);
           this.setPhase('COUNTDOWN', started_at);
-          }
         }
         break;
-      case 'AWAIT_OPEN':
-        if (confirmed('open')) {
-          this.log(`open detected (model latency ${Math.round(ev.latency_ms)} ms)`);
+      }
+      case 'AWAIT_OPEN': {
+        const o = vote('open', this.params.settle_ms);
+        if (o.ok) {
+          this.log(`open detected: ${o.count} agreeing verdicts over ${ev.frame_ts - o.firstTs} ms (model latency ${Math.round(ev.latency_ms)} ms)`);
           this.setPhase('COMPLETE', ev.frame_ts);
         }
         break;
+      }
       default:
         break;
     }
@@ -220,6 +243,7 @@ export class PressSession {
     const t = TEXT[this.phase];
     let hint = '';
     if ((this.phase === 'AWAIT_CLOSE' || this.phase === 'AWAIT_OPEN') && this.lastSeenTs && now - this.lastSeenTs > this.params.lost_after_ms) hint = 'Look at the press';
+    else if ((this.phase === 'AWAIT_CLOSE' || this.phase === 'AWAIT_OPEN') && this.farSince && now - this.farSince > 1500) hint = 'Move closer to the press';
     const lv = this.lastVerdict;
     return {
       phase: this.phase,

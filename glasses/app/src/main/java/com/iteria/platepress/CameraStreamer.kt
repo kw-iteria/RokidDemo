@@ -40,7 +40,7 @@ class CameraStreamer(
         return (sum.toFloat() / px.size / 40f).coerceIn(0f, 1f)
     }
     var targetFps = 6.0
-    var targetLongEdge = 480
+    var targetLongEdge = 720
     var jpegQuality = 60
     /** Extra rotation in degrees if CameraX's own upright correction is wrong on this device. */
     @Volatile var extraRotation = 0
@@ -76,7 +76,7 @@ class CameraStreamer(
         val analysis = ImageAnalysis.Builder()
             .setResolutionSelector(
                 ResolutionSelector.Builder()
-                    .setResolutionStrategy(ResolutionStrategy(Size(640, 480), ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER))
+                    .setResolutionStrategy(ResolutionStrategy(Size(1280, 960), ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER))
                     .build()
             )
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)

@@ -3,7 +3,7 @@
 // pushed to every client in the binary envelope: [u16 len][{"t":"tts",...}][pcm16 bytes].
 
 export interface VoiceConfig { enabled: boolean; voice: string; speed: number; instructions: string }
-export const DEFAULT_VOICE: VoiceConfig = { enabled: true, voice: 'shimmer', speed: 1.0, instructions: 'A sweet, gentle, warm female voice: friendly, kind and unhurried, with a light smile in the tone. Clear and natural, never robotic.' };
+export const DEFAULT_VOICE: VoiceConfig = { enabled: true, voice: 'nova', speed: 1.25, instructions: 'A sweet, cheerful young woman with a warm, affectionate, smiling tone; upbeat and caring, clear and natural, never robotic or flat.' };
 export const TTS_RATE = 24000;
 
 export function ttsEnvelope(header: Record<string, unknown>, pcm: Buffer): Buffer {
