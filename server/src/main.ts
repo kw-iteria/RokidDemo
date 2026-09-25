@@ -21,9 +21,11 @@ const PORT = Number(process.env.PORT ?? 8787);
 const CONFIG_FILE = resolve(ROOT, 'config.local.json');
 const REFS_DIR = resolve(ROOT, 'server', 'refs');
 
+interface CameraConfig { rotation: 0 | 90 | 180 | 270; mirror: boolean; longEdge: number; fps: number; aspect: 'native' | 'landscape' | 'square' }
 interface AppConfig {
   models: string[];
   mode: 'race' | 'primary';
+  camera: CameraConfig;
   maxInflight: number;
   minIntervalMs: number;
   timeoutMs: number;
@@ -34,6 +36,7 @@ interface AppConfig {
 const config: AppConfig = {
   models: (process.env.PRESS_MODELS ?? 'gpt-5.4-mini,gpt-4.1-mini').split(',').map((s) => s.trim()).filter(Boolean),
   mode: (process.env.PRESS_MODE as 'race' | 'primary') ?? 'primary',
+  camera: { rotation: 0, mirror: false, longEdge: 480, fps: 6, aspect: 'native' },
   maxInflight: 4,
   minIntervalMs: 150,
   timeoutMs: 8000,
@@ -45,8 +48,8 @@ if (existsSync(CONFIG_FILE)) {
   try { Object.assign(config, JSON.parse(readFileSync(CONFIG_FILE, 'utf8'))); } catch (e) { console.warn('config.local.json ignored:', (e as Error).message); }
 }
 function persist(): void {
-  const { models, mode, maxInflight, minIntervalMs, timeoutMs, prompt, params } = config;
-  writeFileSync(CONFIG_FILE, JSON.stringify({ models, mode, maxInflight, minIntervalMs, timeoutMs, prompt, params }, null, 2));
+  const { models, mode, maxInflight, minIntervalMs, timeoutMs, prompt, params, camera } = config;
+  writeFileSync(CONFIG_FILE, JSON.stringify({ models, mode, maxInflight, minIntervalMs, timeoutMs, prompt, params, camera }, null, 2));
 }
 
 // ----------------------------------------------------------------------------- core
@@ -66,7 +69,9 @@ const sources = new Map<string, Source>();
 const desktops = new Set<WebSocket>();
 const glassesClients = new Set<WebSocket>();
 let latestFrame: Frame | null = null;
+const recentFrames: Frame[] = []; // last few glasses frames, for inspection via /api/frame.jpg?n=
 let lastRelayAt = 0;
+function cameraMessage(): string { return JSON.stringify({ t: 'camera', ...config.camera }); }
 const logLines: { at: number; level: string; text: string }[] = [];
 
 function log(level: 'info' | 'warn' | 'error', text: string): void {
@@ -99,6 +104,10 @@ function onFrame(source: Source, frame: Frame): void {
   if (activeSourceId() !== source.id) return;
   frame.header.src = source.id;
   latestFrame = frame;
+  if (source.kind === 'glasses' && (recentFrames.length === 0 || frame.recv_ts - recentFrames[recentFrames.length - 1].recv_ts > 400)) {
+    recentFrames.push(frame);
+    if (recentFrames.length > 24) recentFrames.shift();
+  }
   if (session.phase !== 'IDLE') detector.offer(frame); // standby: frames flow to the dashboards, no model calls
   // Relay a live preview to the dashboards (throttled, drop when a client is congested).
   const now = Date.now();
@@ -126,7 +135,7 @@ function stateMessage(): string {
     server_now: now,
     session: session.snapshot(now),
     stats: detector.stats(),
-    config: { models: config.models, mode: config.mode, maxInflight: config.maxInflight, minIntervalMs: config.minIntervalMs, timeoutMs: config.timeoutMs, source: config.source, params: config.params },
+    config: { models: config.models, mode: config.mode, maxInflight: config.maxInflight, minIntervalMs: config.minIntervalMs, timeoutMs: config.timeoutMs, source: config.source, params: config.params, camera: config.camera },
     sources: [...sources.values()].map((s) => ({ id: s.id, kind: s.kind, fps: sourceFps(s), alive: now - s.lastFrameAt < 2500, active: activeSourceId() === s.id, info: s.info ?? null })),
     camera: { live: Boolean(activeSourceId()), source: activeSourceId() },
     hosts: lanAddresses(),
@@ -237,6 +246,18 @@ function applyCommand(msg: Record<string, unknown>, from: string): void {
       break;
     }
     case 'replay': msg.action === 'stop' ? stopReplaySource() : startReplaySource(Boolean(msg.loop), Number(msg.fps ?? 6)); break;
+    case 'set_camera': {
+      const c = (msg.camera ?? {}) as Partial<CameraConfig>;
+      if ([0, 90, 180, 270].includes(Number(c.rotation))) config.camera.rotation = Number(c.rotation) as CameraConfig['rotation'];
+      if (typeof c.mirror === 'boolean') config.camera.mirror = c.mirror;
+      if (typeof c.longEdge === 'number') config.camera.longEdge = Math.max(240, Math.min(1280, Math.round(c.longEdge)));
+      if (typeof c.fps === 'number') config.camera.fps = Math.max(1, Math.min(15, c.fps));
+      if (c.aspect === 'native' || c.aspect === 'landscape' || c.aspect === 'square') config.camera.aspect = c.aspect;
+      persist();
+      for (const ws of glassesClients) if (ws.readyState === WebSocket.OPEN) ws.send(cameraMessage());
+      log('info', `camera settings → rotation ${config.camera.rotation}°${config.camera.mirror ? ', mirrored' : ''}, ${config.camera.aspect}, ${config.camera.longEdge}px, ${config.camera.fps} fps (${from})`);
+      break;
+    }
     case 'set_reference': {
       const kind = msg.kind === 'open' ? 'open' : msg.kind === 'closed' ? 'closed' : null;
       if (!kind || !latestFrame) { log('warn', 'set_reference: need kind open|closed and a live frame'); break; }
@@ -272,6 +293,11 @@ const server = http.createServer((req, res) => {
   if (url.pathname === '/api/state') return send(200, stateMessage());
   if (url.pathname === '/api/models') return send(200, JSON.stringify({ candidates: CANDIDATE_MODELS, bench: latestBench(), default_prompt: DEFAULT_PROMPT }));
   if (url.pathname === '/api/log') return send(200, JSON.stringify(logLines));
+  if (url.pathname === '/api/frame.jpg') {
+    const n = Number(url.searchParams.get('n') ?? 0);
+    const f = recentFrames[recentFrames.length - 1 - n] ?? latestFrame;
+    return f ? send(200, f.jpeg, 'image/jpeg') : send(404, 'no frame yet', 'text/plain');
+  }
   if (url.pathname.startsWith('/refs/')) {
     const f = resolve(REFS_DIR, url.pathname.slice(6).replace(/[^a-z.]/g, ''));
     return existsSync(f) ? send(200, readFileSync(f), 'image/jpeg') : send(404, 'no reference yet', 'text/plain');
@@ -343,7 +369,7 @@ wss.on('connection', (ws, req) => {
       }
       try {
         const msg = JSON.parse(data.toString());
-        if (msg.t === 'hello') { src.info = msg.device ?? msg; log('info', `${id} hello ${JSON.stringify(src.info).slice(0, 160)}`); }
+        if (msg.t === 'hello') { src.info = msg.device ?? msg; log('info', `${id} hello ${JSON.stringify(src.info).slice(0, 160)}`); ws.send(cameraMessage()); }
         else if (msg.t === 'gesture') { session.gesture(String(msg.name)); log('info', `gesture ${msg.name} from ${id}`); }
         else if (msg.t === 'chat') void handleChat(String(msg.text ?? ''), id);
         else if (msg.t === 'status') {

@@ -10,6 +10,7 @@
     source: $('source'), model: $('model'), model2: $('model2'), mode: $('mode'), inflight: $('inflight'), interval: $('interval'),
     confirm: $('confirm'), dwell: $('dwell'), hosts: $('hosts'), log: $('log'),
     prompt: $('prompt'), promptBox: $('prompt-box'),
+    camRot: $('cam-rot'), camMirror: $('cam-mirror'), camAspect: $('cam-aspect'), camEdge: $('cam-edge'), camFps: $('cam-fps'),
     chatLog: $('chat-log'), chatForm: $('chat-form'), chatInput: $('chat-input'), chatThinking: $('chat-thinking'), mic: $('btn-mic'), hudChat: $('hud-chat'),
   };
   const state = { snap: null, offset: 0, verdicts: [], lastFrameUrl: null, sound: true, voice: false, lastPhase: null, lastBeep: 0, defaultPrompt: '', bench: null, editing: false };
@@ -57,6 +58,7 @@
     els.srcPill.textContent = active ? `${active.kind} ${active.fps} fps` : idleGlasses ? `glasses connected, camera: ${idleGlasses.info.camera.status}${idleGlasses.info.camera.permission === false ? ' (permission missing)' : ''}` : 'no camera';
     els.srcPill.className = active ? 'pill ok' : idleGlasses ? 'pill warn' : 'pill';
     els.srcPill.title = idleGlasses && idleGlasses.info.camera.error ? idleGlasses.info.camera.error : '';
+    document.querySelector('.viewport').classList.toggle('glasses-live', Boolean(active && active.kind === 'glasses'));
     els.modelPill.textContent = msg.config.models.join(msg.config.mode === 'race' ? ' ∥ ' : ' → ');
     els.latPill.textContent = msg.stats.p50_ms ? `${msg.stats.p50_ms} ms · ${msg.stats.decisions_per_s}/s` : '— ms';
     els.hosts.textContent = msg.hosts.length ? `glasses find this Mac at ${msg.hosts.map((h) => `${h}:${msg.port}`).join(' or ')}` : '';
@@ -76,6 +78,7 @@
     els.model.value = msg.config.models[0] || '';
     els.model2.value = msg.config.models[1] || '';
     els.mode.value = msg.config.mode || 'primary';
+    if (msg.config.camera) { els.camRot.value = String(msg.config.camera.rotation); els.camMirror.value = String(msg.config.camera.mirror); els.camAspect.value = msg.config.camera.aspect || 'native'; els.camEdge.value = msg.config.camera.longEdge; els.camFps.value = msg.config.camera.fps; }
     els.inflight.value = msg.config.maxInflight;
     els.interval.value = msg.config.minIntervalMs;
     els.confirm.value = msg.config.params.confirmations;
@@ -208,6 +211,12 @@
     el.addEventListener('change', pushConfig);
   }
   els.source.addEventListener('change', () => cmd({ cmd: 'set', config: { source: els.source.value } }));
+  const pushCamera = () => cmd({ cmd: 'set_camera', camera: { rotation: Number(els.camRot.value), mirror: els.camMirror.value === 'true', aspect: els.camAspect.value, longEdge: Number(els.camEdge.value), fps: Number(els.camFps.value) } });
+  for (const el of [els.camRot, els.camMirror, els.camAspect, els.camEdge, els.camFps]) {
+    el.addEventListener('focus', () => (state.editing = true));
+    el.addEventListener('blur', () => (state.editing = false));
+    el.addEventListener('change', pushCamera);
+  }
   let replaying = false;
   $('btn-replay').onclick = (e) => { replaying = !replaying; cmd({ cmd: 'replay', action: replaying ? 'start' : 'stop', loop: false, fps: 6 }); e.target.textContent = replaying ? 'Stop replay' : 'Replay demo clip'; };
   $('btn-sound').onclick = (e) => { state.sound = !state.sound; e.target.setAttribute('aria-pressed', String(state.sound)); e.target.textContent = state.sound ? 'Sound on' : 'Sound off'; if (state.sound) beep(660, 80); };

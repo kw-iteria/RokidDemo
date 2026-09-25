@@ -29,6 +29,7 @@
         <p class="muted">Start the app on the glasses, replay the demo clip, or use this computer's camera.</p>
       </div>
       <div class="verdict-badge" id="verdict-badge"></div>
+      <div class="fov-guide" id="fov-guide" title="Roughly the part of the camera view that the glasses display covers"></div>
     </div>
     <div class="ribbon-wrap">
       <canvas id="ribbon" height="28"></canvas>
@@ -106,6 +107,24 @@
     <button id="btn-voice" aria-pressed="false">Voice off</button>
     <button id="btn-prompt">Edit prompt</button>
     <span id="hosts" class="hosts"></span>
+  </div>
+  <div class="row">
+    <label>Glasses camera rotation
+      <select id="cam-rot"><option value="0">as delivered</option><option value="90">turn 90° clockwise</option><option value="180">turn 180°</option><option value="270">turn 90° counter-clockwise</option></select>
+    </label>
+    <label>Mirror
+      <select id="cam-mirror"><option value="false">no</option><option value="true">yes</option></select>
+    </label>
+    <label>Frame shape
+      <select id="cam-aspect"><option value="native">as delivered</option><option value="landscape">landscape 16:9 (centre crop)</option><option value="square">square (centre crop)</option></select>
+    </label>
+    <label>Frame long edge (px)
+      <input id="cam-edge" type="number" min="240" max="1280" step="40" value="480">
+    </label>
+    <label>Frames per second
+      <input id="cam-fps" type="number" min="1" max="15" value="6">
+    </label>
+    <span class="muted">Changes apply live on the glasses (app 0.2 or newer).</span>
   </div>
   <div class="row refs">
     <span class="muted">Reference photos of the press (what "open" and "closed" look like):</span>

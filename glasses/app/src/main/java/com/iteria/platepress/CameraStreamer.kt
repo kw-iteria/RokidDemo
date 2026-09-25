@@ -26,7 +26,10 @@ class CameraStreamer(
     var targetLongEdge = 480
     var jpegQuality = 60
     /** Extra rotation in degrees if CameraX's own upright correction is wrong on this device. */
-    var extraRotation = 0
+    @Volatile var extraRotation = 0
+    @Volatile var mirror = false
+    /** "native" keeps the sensor aspect; "landscape" crops the centre to 16:9 (like the glasses' own videos); "square" crops to 1:1. */
+    @Volatile var aspect = "native"
 
     @Volatile var fps = 0f; private set
     @Volatile var framesSent = 0L; private set
@@ -90,12 +93,20 @@ class CameraStreamer(
         plane.buffer.rewind()
         bmp.copyPixelsFromBuffer(plane.buffer)
         if (strideWidth != image.width) bmp = Bitmap.createBitmap(bmp, 0, 0, image.width, image.height)
+        // Optional centre crop so the frame matches what the operator sees through the lens.
+        val targetRatio = when (aspect) { "landscape" -> 16f / 9f; "square" -> 1f; else -> 0f }
+        if (targetRatio > 0f) {
+            val cur = bmp.width.toFloat() / bmp.height
+            if (cur < targetRatio) { val h = (bmp.width / targetRatio).toInt(); bmp = Bitmap.createBitmap(bmp, 0, (bmp.height - h) / 2, bmp.width, h) }
+            else if (cur > targetRatio) { val w = (bmp.height * targetRatio).toInt(); bmp = Bitmap.createBitmap(bmp, (bmp.width - w) / 2, 0, w, bmp.height) }
+        }
 
         val scale = targetLongEdge.toFloat() / maxOf(bmp.width, bmp.height)
         val rotation = (image.imageInfo.rotationDegrees + extraRotation + 360) % 360 // 0 once CameraX rotated the buffer
-        if (scale < 1f || rotation != 0) {
+        if (scale < 1f || rotation != 0 || mirror) {
             val m = Matrix()
             if (scale < 1f) m.postScale(scale, scale)
+            if (mirror) m.postScale(-1f, 1f)
             if (rotation != 0) m.postRotate(rotation.toFloat())
             bmp = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, m, true)
         }

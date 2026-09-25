@@ -50,6 +50,16 @@ class MainActivity : ComponentActivity() {
             JSONObject().put("permission", granted).put("status", c?.status ?: if (granted) "not started" else "permission not granted")
                 .put("frames", c?.framesSent ?: 0).put("fps", c?.fps ?: 0f).put("error", c?.lastError ?: "")
         }
+        model.applyCamera = { j ->
+            camera?.let { c ->
+                c.extraRotation = j.optInt("rotation", c.extraRotation)
+                c.mirror = j.optBoolean("mirror", c.mirror)
+                c.targetLongEdge = j.optInt("longEdge", c.targetLongEdge)
+                c.targetFps = j.optDouble("fps", c.targetFps)
+                c.aspect = j.optString("aspect", c.aspect)
+            }
+            pendingCamera = j
+        }
         model.start()
         setContent {
             val state by model.state.collectAsState()
@@ -65,9 +75,18 @@ class MainActivity : ComponentActivity() {
         if (needed.isNotEmpty()) permissions.launch(needed.toTypedArray())
     }
 
+    private var pendingCamera: JSONObject? = null
+
     private fun startCamera() {
         if (camera != null) return
-        camera = CameraStreamer(this, this) { jpeg, w, h -> model.onFrame(jpeg, w, h) }.also { it.start() }
+        camera = CameraStreamer(this, this) { jpeg, w, h -> model.onFrame(jpeg, w, h) }.also { c ->
+            pendingCamera?.let { j ->
+                c.extraRotation = j.optInt("rotation", 0); c.mirror = j.optBoolean("mirror", false)
+                c.targetLongEdge = j.optInt("longEdge", 480); c.targetFps = j.optDouble("fps", 6.0)
+                c.aspect = j.optString("aspect", "native")
+            }
+            c.start()
+        }
     }
 
     override fun onResume() {

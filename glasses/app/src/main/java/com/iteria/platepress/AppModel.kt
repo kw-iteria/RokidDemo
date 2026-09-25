@@ -41,6 +41,8 @@ class AppModel(context: Context) {
 
     /** Filled in by the activity so the heartbeat can report camera health to the server. */
     var cameraStatus: () -> JSONObject = { JSONObject().put("status", "no camera object") }
+    /** Filled in by the activity: applies camera settings pushed from the console. */
+    var applyCamera: (JSONObject) -> Unit = {}
 
     fun start() {
         scope.launch { connectionLoop() }
@@ -91,6 +93,7 @@ class AppModel(context: Context) {
                 sounds.say(text)
             }
             "chat.thinking" -> _state.update { it.copy(thinking = j.optBoolean("on")) }
+            "camera" -> applyCamera(j)
         }
     }
 
