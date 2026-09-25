@@ -42,7 +42,7 @@ button, select, input, textarea { font: inherit; color: inherit; }
 .subtitle-live:empty { display: none; }
 .fov-guide { position: absolute; left: 32%; top: 30%; width: 36%; height: 40%; border: 1px dashed rgba(140,207,255,0.55); border-radius: 6px; pointer-events: none; display: none; }
 .fov-guide::after { content: "display view"; position: absolute; left: 6px; top: -18px; font-size: 11px; color: rgba(140,207,255,0.8); }
-.viewport.glasses-live .fov-guide { display: block; }
+.viewport.glasses-live.has-frame .fov-guide { display: block; }
 .ribbon-wrap { margin-top: 10px; }
 #ribbon { width: 100%; height: 28px; display: block; border-radius: 4px; background: var(--panel); }
 .legend { display: flex; align-items: center; gap: 6px; margin-top: 6px; color: var(--muted); font-size: 12px; }

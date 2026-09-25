@@ -68,6 +68,7 @@
     els.live.src = url;
     els.live.classList.add('on');
     els.liveEmpty.style.display = 'none';
+    document.querySelector('.viewport').classList.add('has-frame');
   }
 
   // ------------------------------------------------------------------ state
