@@ -30,14 +30,15 @@ fi
 
 echo "Link"
 if curl -s -m 2 localhost:8787/api/state >/dev/null; then
-  curl -s localhost:8787/api/state | python3 -c '
-import sys,json
-d=json.load(sys.stdin)
-g=[s for s in d["sources"] if s["kind"]=="glasses"]
+  curl -s localhost:8787/api/state | python3 - <<'PY'
+import sys, json
+d = json.load(sys.stdin)
+g = [s for s in d["sources"] if s["kind"] == "glasses"]
 if g:
-    for s in g: print(f"  \033[32m✔\033[0m glasses connected to the server: {s[\"id\"]} at {s[\"fps\"]} fps{\"\" if s[\"alive\"] else \" (no frames yet)\"}")
+    for s in g:
+        print("  \033[32m\u2714\033[0m glasses connected to the server: %s at %s fps%s" % (s["id"], s["fps"], "" if s["alive"] else " (no frames yet)"))
 else:
-    print("  \033[31m✘\033[0m no glasses connected to the server yet (app not running, or beacon blocked — see README fallback)")
-print(f"    phase: {d[\"session\"][\"phase\"]}   models: {\" + \".join(d[\"config\"][\"models\"])}")
-'
+    print("  \033[31m\u2718\033[0m no glasses connected to the server yet (app not running, or beacon blocked - see README fallback)")
+print("    phase: %s   models: %s" % (d["session"]["phase"], " + ".join(d["config"]["models"])))
+PY
 fi
