@@ -11,6 +11,7 @@
     confirm: $('confirm'), dwell: $('dwell'), settle: $('settle'), handfree: $('handfree'), hosts: $('hosts'), log: $('log'),
     prompt: $('prompt'), promptBox: $('prompt-box'),
     camRot: $('cam-rot'), camMirror: $('cam-mirror'), camAspect: $('cam-aspect'), camEdge: $('cam-edge'), camFps: $('cam-fps'),
+    chatFast: $('chat-fast'), chatVision: $('chat-vision'),
     chatLog: $('chat-log'), chatForm: $('chat-form'), chatInput: $('chat-input'), chatThinking: $('chat-thinking'), mic: $('btn-mic'), hudChat: $('hud-chat'),
   };
   const state = { snap: null, offset: 0, verdicts: [], lastFrameUrl: null, sound: true, voice: false, lastPhase: null, lastBeep: 0, defaultPrompt: '', bench: null, editing: false };
@@ -29,6 +30,7 @@
       else if (msg.t === 'verdict') onVerdict(msg);
       else if (msg.t === 'log') addLog(msg);
       else if (msg.t === 'chat') addChat(msg, true);
+      else if (msg.t === 'chat.delta') addDelta(msg);
       else if (msg.t === 'chat.history') { els.chatLog.querySelectorAll('li:not(.hint)').forEach((n) => n.remove()); for (const m of msg.messages) addChat(m, false); }
       else if (msg.t === 'chat.thinking') { els.chatThinking.hidden = !msg.on; els.chatThinking.textContent = msg.stt ? 'listening…' : 'thinking…'; }
     };
@@ -78,6 +80,7 @@
     els.model.value = msg.config.models[0] || '';
     els.model2.value = msg.config.models[1] || '';
     els.mode.value = msg.config.mode || 'primary';
+    if (msg.config.chatFast) { els.chatFast.value = msg.config.chatFast; els.chatVision.value = msg.config.chatVision; }
     if (msg.config.camera) { els.camRot.value = String(msg.config.camera.rotation); els.camMirror.value = String(msg.config.camera.mirror); els.camAspect.value = msg.config.camera.aspect || 'native'; els.camEdge.value = msg.config.camera.longEdge; els.camFps.value = msg.config.camera.fps; }
     els.inflight.value = msg.config.maxInflight;
     els.interval.value = msg.config.minIntervalMs;
@@ -228,14 +231,32 @@
   $('btn-prompt-reset').onclick = () => { els.prompt.value = state.defaultPrompt; cmd({ cmd: 'set', config: { prompt: state.defaultPrompt } }); };
 
   // ------------------------------------------------------------------ chat
+  const CHAT_MODELS = ['groq/openai/gpt-oss-20b', 'groq/openai/gpt-oss-120b', 'groq/qwen/qwen3.8-27b', 'cerebras/gpt-oss-120b', 'cerebras/qwen-3.8-27b', 'gpt-5.4-nano', 'gpt-5.4-mini', 'gpt-4.1-nano', 'gpt-4.1-mini', 'gpt-4o-mini', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'xai/grok-4.20-0309-non-reasoning'];
+  const VISION_MODELS = ['gpt-4.1-mini', 'gpt-4.1-nano', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-4o-mini', 'gemini-3.5-flash-lite', 'gemini-3.1-flash-lite'];
+  els.chatFast.innerHTML = CHAT_MODELS.map((m) => `<option value="${m}">${m}</option>`).join('');
+  els.chatVision.innerHTML = VISION_MODELS.map((m) => `<option value="${m}">${m}</option>`).join('');
+  for (const el of [els.chatFast, els.chatVision]) {
+    el.addEventListener('focus', () => (state.editing = true));
+    el.addEventListener('blur', () => (state.editing = false));
+    el.addEventListener('change', () => cmd({ cmd: 'set', config: { chatFast: els.chatFast.value, chatVision: els.chatVision.value } }));
+  }
+  function addDelta(m) {
+    let li = document.getElementById(`chat-${m.id}`);
+    if (!li) {
+      li = document.createElement('li'); li.className = 'assistant streaming'; li.id = `chat-${m.id}`; li.textContent = '';
+      els.chatLog.appendChild(li); els.chatThinking.hidden = true;
+    }
+    li.textContent += m.delta;
+    els.chatLog.scrollTop = els.chatLog.scrollHeight;
+  }
   function addChat(m, fresh) {
-    const li = document.createElement('li');
-    li.className = m.role;
-    li.textContent = m.text;
+    let li = document.getElementById(`chat-${m.id}`);
+    if (li) { li.classList.remove('streaming'); li.textContent = m.text; }
+    else { li = document.createElement('li'); li.className = m.role; li.id = `chat-${m.id}`; li.textContent = m.text; }
     const small = document.createElement('small');
-    small.textContent = `${new Date(m.at).toLocaleTimeString([], { hour12: false })}${m.from && m.role === 'user' ? ` · from ${m.from}` : ''}`;
+    small.textContent = `${new Date(m.at).toLocaleTimeString([], { hour12: false })}${m.from && m.role === 'user' ? ` · from ${m.from}` : ''}${m.model ? ` · ${m.model}${m.ms ? ` · ${m.ms} ms` : ''}` : ''}`;
     li.appendChild(small);
-    els.chatLog.appendChild(li);
+    if (!li.parentNode) els.chatLog.appendChild(li);
     els.chatLog.scrollTop = els.chatLog.scrollHeight;
     if (m.role === 'assistant' && fresh) { state.hudChat = { text: m.text, at: Date.now() }; say(m.text); }
   }

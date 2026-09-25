@@ -27,6 +27,8 @@ interface AppConfig {
   models: string[];
   mode: 'race' | 'primary';
   camera: CameraConfig;
+  chatFast: string;    // text-only conversation + tool calls
+  chatVision: string;  // questions about the camera view
   maxInflight: number;
   minIntervalMs: number;
   timeoutMs: number;
@@ -38,6 +40,8 @@ const config: AppConfig = {
   models: (process.env.PRESS_MODELS ?? 'gpt-5.4-mini,gpt-4.1-mini').split(',').map((s) => s.trim()).filter(Boolean),
   mode: (process.env.PRESS_MODE as 'race' | 'primary') ?? 'primary',
   camera: { rotation: 0, mirror: false, longEdge: 480, fps: 6, aspect: 'native' },
+  chatFast: process.env.CHAT_FAST_MODEL ?? 'groq/qwen/qwen3.8-27b',
+  chatVision: process.env.CHAT_VISION_MODEL ?? 'gpt-4.1-mini',
   maxInflight: 4,
   minIntervalMs: 150,
   timeoutMs: 8000,
@@ -49,8 +53,8 @@ if (existsSync(CONFIG_FILE)) {
   try { Object.assign(config, JSON.parse(readFileSync(CONFIG_FILE, 'utf8'))); } catch (e) { console.warn('config.local.json ignored:', (e as Error).message); }
 }
 function persist(): void {
-  const { models, mode, maxInflight, minIntervalMs, timeoutMs, prompt, params, camera } = config;
-  writeFileSync(CONFIG_FILE, JSON.stringify({ models, mode, maxInflight, minIntervalMs, timeoutMs, prompt, params, camera }, null, 2));
+  const { models, mode, maxInflight, minIntervalMs, timeoutMs, prompt, params, camera, chatFast, chatVision } = config;
+  writeFileSync(CONFIG_FILE, JSON.stringify({ models, mode, maxInflight, minIntervalMs, timeoutMs, prompt, params, camera, chatFast, chatVision }, null, 2));
 }
 
 // ----------------------------------------------------------------------------- core
@@ -138,7 +142,7 @@ function stateMessage(): string {
     server_now: now,
     session: session.snapshot(now),
     stats: detector.stats(),
-    config: { models: config.models, mode: config.mode, maxInflight: config.maxInflight, minIntervalMs: config.minIntervalMs, timeoutMs: config.timeoutMs, source: config.source, params: config.params, camera: config.camera },
+    config: { models: config.models, mode: config.mode, maxInflight: config.maxInflight, minIntervalMs: config.minIntervalMs, timeoutMs: config.timeoutMs, source: config.source, params: config.params, camera: config.camera, chatFast: config.chatFast, chatVision: config.chatVision },
     sources: [...sources.values()].map((s) => ({ id: s.id, kind: s.kind, fps: sourceFps(s), alive: now - s.lastFrameAt < 2500, active: activeSourceId() === s.id, info: s.info ?? null })),
     camera: { live: Boolean(activeSourceId()), source: activeSourceId() },
     hosts: lanAddresses(),
@@ -173,7 +177,7 @@ function startWorkflow(): string {
   session.start();
   return 'workflow started: looking for the press';
 }
-const agent = new Agent(process.env.CHAT_MODEL ?? 'gpt-5.4-mini', () => {
+const agent = new Agent({ fast: config.chatFast, vision: config.chatVision }, () => {
   const src = activeSourceId();
   const srcObj = src ? sources.get(src) : undefined;
   return {
@@ -182,6 +186,7 @@ const agent = new Agent(process.env.CHAT_MODEL ?? 'gpt-5.4-mini', () => {
     config: { models: config.models, countdown_ms: config.params.countdown_ms, confirmations: config.params.confirmations },
     stats: { p50_ms: detector.stats().p50_ms, decisions_per_s: detector.stats().decisions_per_s },
     frame: latestFrame && Date.now() - latestFrame.recv_ts < 5000 ? latestFrame.jpeg : null,
+    refs: (detector.config.refs ?? []).filter((r, i, arr) => i === arr.findIndex((x) => x.label === r.label)).filter((r) => !/NOT CLOSED/.test(r.label)), // one open + one closed
   };
 }, {
   start_workflow: startWorkflow,
@@ -201,9 +206,13 @@ async function handleChat(text: string, from: string): Promise<void> {
   chatBusy = true;
   broadcast(JSON.stringify({ t: 'chat.thinking', on: true }));
   try {
-    const reply = await agent.chat(clean, from, (e) => log('info', `agent tool ${e.name}: ${e.result}`));
+    const reply = await agent.chat(
+      clean, from,
+      (id, delta) => broadcast(JSON.stringify({ t: 'chat.delta', id, delta })),
+      (e) => { if (e.type === 'tool') log('info', `agent tool ${e.name}: ${e.result}`); else log('info', `chat model ${e.model}${e.vision ? ' (with camera frame)' : ''}`); },
+    );
     broadcast(JSON.stringify({ t: 'chat', ...reply }));
-    log('info', `chat (${from}): "${clean.slice(0, 80)}" → "${reply.text.slice(0, 100)}"`);
+    log('info', `chat (${from}, ${reply.model}, ${reply.ms} ms): "${clean.slice(0, 80)}" → "${reply.text.slice(0, 100)}"`);
   } catch (e) {
     const msg = (e as Error).message;
     log('error', `chat failed: ${msg}`);
@@ -237,6 +246,8 @@ function applyCommand(msg: Record<string, unknown>, from: string): void {
       const c = (msg.config ?? {}) as Partial<AppConfig>;
       if (Array.isArray(c.models) && c.models.length) config.models = c.models.map(String);
       if (c.mode === 'race' || c.mode === 'primary') config.mode = c.mode;
+      if (typeof c.chatFast === 'string' && c.chatFast.trim()) { config.chatFast = c.chatFast.trim(); agent.models.fast = config.chatFast; }
+      if (typeof c.chatVision === 'string' && c.chatVision.trim()) { config.chatVision = c.chatVision.trim(); agent.models.vision = config.chatVision; }
       if (typeof c.maxInflight === 'number') config.maxInflight = Math.max(1, Math.min(6, c.maxInflight));
       if (typeof c.minIntervalMs === 'number') config.minIntervalMs = Math.max(50, c.minIntervalMs);
       if (typeof c.timeoutMs === 'number') config.timeoutMs = Math.max(1000, c.timeoutMs);

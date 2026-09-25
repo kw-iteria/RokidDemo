@@ -121,7 +121,7 @@ private fun Subtitle(state: HudState, u: Dp, modifier: Modifier) {
         Spacer(Modifier.height(u * 0.02f))
         when (state.phase) {
             "CONNECTING" -> {
-                Line(if (state.connected) "Connected" else "Looking for PlatePress on this network", u, 0.045f, color = Dim.copy(alpha = 0.4f + 0.5f * breathe), weight = FontWeight.Normal)
+                Line(if (state.connected) "Connected" else "Looking for the Iteria server on this network", u, 0.045f, color = Dim.copy(alpha = 0.4f + 0.5f * breathe), weight = FontWeight.Normal)
                 if (state.host.isNotBlank()) Line(state.host, u, 0.032f, color = Faint, weight = FontWeight.Normal)
             }
             "IDLE" -> {

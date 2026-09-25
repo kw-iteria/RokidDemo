@@ -1,8 +1,10 @@
-// Chat agent for the console and the glasses. It sees the latest camera frame and the workflow
-// state, answers briefly (replies are spoken on the glasses), and drives the workflow with tools.
+// Chat agent for the console and the glasses. General chatbot + workflow control.
+// Two models: a fast text model for ordinary conversation and tool calls, and a vision-capable
+// model when the question is about what the camera sees. Replies stream token by token.
 import type { SessionSnapshot } from './session.ts';
+import { streamChat, type ChatMsg, type ChatTool, type ToolCall } from './chat.ts';
 
-export interface ChatMessage { id: string; role: 'user' | 'assistant'; text: string; at: number; from?: string }
+export interface ChatMessage { id: string; role: 'user' | 'assistant'; text: string; at: number; from?: string; model?: string; ms?: number }
 
 export interface AgentContext {
   state: SessionSnapshot;
@@ -10,46 +12,61 @@ export interface AgentContext {
   config: { models: string[]; countdown_ms: number; confirmations: number };
   stats: { p50_ms: number; decisions_per_s: number };
   frame: Buffer | null;
+  refs?: { label: string; jpeg: Buffer }[]; // a couple of reference photos for camera questions
 }
 
-export type ToolResult = string;
+/** Replies are spoken and shown on a tiny display: drop markdown decorations. */
+export function stripMarkdown(t: string): string {
+  return t
+    .replace(/\*\*(.*?)\*\*/g, '$1').replace(/__(.*?)__/g, '$1')
+    .replace(/(^|\s)\*(\S[^*]*)\*(?=\s|$|[.,!?])/g, '$1$2').replace(/`([^`]*)`/g, '$1')
+    .replace(/^#{1,6}\s+/gm, '').replace(/^\s*[-*]\s+/gm, '- ')
+    .trim();
+}
+
 export interface AgentTools {
-  start_workflow: () => ToolResult;
-  stop_workflow: () => ToolResult;
-  set_press_time: (seconds: number) => ToolResult;
-  set_confirmations: (n: number) => ToolResult;
-  set_models: (models: string[]) => ToolResult;
-  set_reference: (kind: 'open' | 'closed') => ToolResult;
+  start_workflow: () => string;
+  stop_workflow: () => string;
+  set_press_time: (seconds: number) => string;
+  set_confirmations: (n: number) => string;
+  set_models: (models: string[]) => string;
+  set_reference: (kind: 'open' | 'closed') => string;
 }
 
-const TOOL_DEFS = [
-  { type: 'function', name: 'start_workflow', description: 'Start (or restart) the plate-press workflow: begin detecting the press, then guide close → 10 s countdown → open.', parameters: { type: 'object', properties: {}, additionalProperties: false }, strict: true },
-  { type: 'function', name: 'stop_workflow', description: 'Stop the workflow and go back to standby (no detection, no countdown).', parameters: { type: 'object', properties: {}, additionalProperties: false }, strict: true },
-  { type: 'function', name: 'set_press_time', description: 'Change how long the press must stay closed, in seconds.', parameters: { type: 'object', properties: { seconds: { type: 'number' } }, required: ['seconds'], additionalProperties: false }, strict: true },
-  { type: 'function', name: 'set_confirmations', description: 'How many consecutive agreeing camera verdicts are needed before a state change is accepted (1-5).', parameters: { type: 'object', properties: { n: { type: 'integer' } }, required: ['n'], additionalProperties: false }, strict: true },
-  { type: 'function', name: 'set_models', description: 'Choose the vision model(s). Several models race per frame; the fastest valid answer wins.', parameters: { type: 'object', properties: { models: { type: 'array', items: { type: 'string' } } }, required: ['models'], additionalProperties: false }, strict: true },
-  { type: 'function', name: 'set_reference', description: 'Save the current camera frame as the reference photo of the press in the given lid state.', parameters: { type: 'object', properties: { kind: { type: 'string', enum: ['open', 'closed'] } }, required: ['kind'], additionalProperties: false }, strict: true },
+export interface AgentModels { fast: string; vision: string }
+
+const TOOL_DEFS: ChatTool[] = [
+  { type: 'function', function: { name: 'start_workflow', description: 'Start (or restart) the plate-press workflow: detect the press, then guide close → countdown → open.', parameters: { type: 'object', properties: {}, additionalProperties: false } } },
+  { type: 'function', function: { name: 'stop_workflow', description: 'Stop the workflow and go back to standby.', parameters: { type: 'object', properties: {}, additionalProperties: false } } },
+  { type: 'function', function: { name: 'set_press_time', description: 'Change how long the press must stay closed, in seconds.', parameters: { type: 'object', properties: { seconds: { type: 'number' } }, required: ['seconds'], additionalProperties: false } } },
+  { type: 'function', function: { name: 'set_confirmations', description: 'Consecutive agreeing camera verdicts needed before a state change (1-5).', parameters: { type: 'object', properties: { n: { type: 'integer' } }, required: ['n'], additionalProperties: false } } },
+  { type: 'function', function: { name: 'set_models', description: 'Choose the vision model(s) for press detection.', parameters: { type: 'object', properties: { models: { type: 'array', items: { type: 'string' } } }, required: ['models'], additionalProperties: false } } },
+  { type: 'function', function: { name: 'set_reference', description: 'Save the current camera frame as the reference photo of the press in the given lid state.', parameters: { type: 'object', properties: { kind: { type: 'string', enum: ['open', 'closed'] } }, required: ['kind'], additionalProperties: false } } },
 ];
 
-const INSTRUCTIONS = `You are the PlatePress assistant: a general-purpose, friendly chatbot that also operates the plate-press workflow in a lab. The operator talks to you from a desktop console or through Rokid smart glasses.
+const INSTRUCTIONS = `You are the Iteria assistant: a general-purpose, friendly chatbot that also operates the plate-press workflow in a lab. The operator talks to you from a desktop console or through Rokid smart glasses.
 Answer anything: general knowledge, science, lab questions, math, small talk, translations, advice. Be accurate; say when you are unsure.
-You also receive the live camera frame and the workflow state with every message; use them when the question is about the scene or the workflow.
-The workflow you run: find the plate press (a small silver glass box with a hinged lid), ask the operator to close it, count down while it is closed, then ask them to open it, then report completion.
-Tools: when the operator asks to start, begin, run, or do the workflow (any wording), call start_workflow. "Stop", "cancel", "standby" → stop_workflow. Change timing or settings with the matching tool. After a tool call, confirm briefly in words. Never claim a tool ran unless you called it.
-Style: replies are read aloud in the glasses, so keep them short (one to three sentences) unless the operator asks for detail, a list, or an explanation; then answer fully. Plain text, no markdown tables or headings; simple lists are fine on request.
-When asked what you see, describe the frame plainly and say whether the press is visible and open or closed. If the camera is not live, say so.`;
+The workflow you run: find the plate press, ask the operator to close it, count down while it is closed, then ask them to open it, then report completion. The workflow runs by itself on the server; you only start or stop it.
+The plate press in this lab looks like a small white / silver rectangular case with a hinged lid (about the size of a glasses case). When you see that white box, that IS the plate press; call it "the press". Reference photos of it (open and closed) may be attached before the live frame.
+Tools: when the operator asks to start, begin, run, or do the workflow (any wording), call start_workflow. "Stop", "cancel", "standby" → stop_workflow. Change timing or settings with the matching tool. Never claim a tool ran unless you called it.
+After a tool call you receive its result; then answer with ONE short sentence that states that result only (for example "Workflow started, looking for the press."). Never narrate, simulate or predict the following steps, countdowns or detections; the operator is guided by the glasses display.
+Style: replies are read aloud in the glasses, so keep them short (one to three sentences) unless the operator asks for detail, a list, or an explanation; then answer fully. Plain text only: no markdown, no bold, no headings; simple numbered lists are fine on request.
+When asked what you see, describe the attached camera frame plainly and say whether the press is visible and open or closed. If no frame is attached or the camera is not live, say the camera is not live.`;
 
-const reasoningCache = new Map<string, string | null>();
+/** Does this message need the camera picture (vision model) rather than just text? */
+export function needsVision(text: string): boolean {
+  return /\b(see|seeing|look|looking|view|camera|frame|picture|image|photo|scene|visible|in front|what is this|what's this|describe|open or closed|is it (open|closed)|is the (press|box|lid)|what colou?r|how many|read (the|this)|table|bench)\b/i.test(text);
+}
 
 export class Agent {
   history: ChatMessage[] = [];
-  private model: string;
+  models: AgentModels;
   private getContext: () => AgentContext;
   private tools: AgentTools;
   private seq = 0;
 
-  constructor(model: string, getContext: () => AgentContext, tools: AgentTools) {
-    this.model = model;
+  constructor(models: AgentModels, getContext: () => AgentContext, tools: AgentTools) {
+    this.models = models;
     this.getContext = getContext;
     this.tools = tools;
   }
@@ -62,7 +79,7 @@ export class Agent {
       `camera=${ctx.camera.live ? `live (${ctx.camera.source}, ${ctx.camera.fps} fps)` : 'not live'}`,
       remaining !== null ? `countdown_remaining_s=${remaining}` : '',
       s.last_verdict ? `last_camera_verdict: press_visible=${s.last_verdict.press_visible} lid=${s.last_verdict.lid} confidence=${s.last_verdict.confidence} age_ms=${s.last_verdict.age_ms}` : 'last_camera_verdict: none yet',
-      `press_time_s=${ctx.config.countdown_ms / 1000} confirmations=${ctx.config.confirmations} models=${ctx.config.models.join('+')} verdict_latency_p50_ms=${ctx.stats.p50_ms}`,
+      `press_time_s=${ctx.config.countdown_ms / 1000} confirmations=${ctx.config.confirmations} detection_models=${ctx.config.models.join('+')} verdict_latency_p50_ms=${ctx.stats.p50_ms}`,
       `run=${s.run}`,
     ].filter(Boolean).join('\n');
   }
@@ -83,58 +100,65 @@ export class Agent {
     }
   }
 
-  async chat(userText: string, from = 'console', onEvent: (e: { type: 'tool'; name: string; result: string }) => void = () => {}): Promise<ChatMessage> {
-    const key = process.env.OPENAI_API_KEY;
-    if (!key) throw new Error('OPENAI_API_KEY missing');
+  /**
+   * One conversational turn. `onDelta` receives streamed text; `onEvent` reports tool calls and the model used.
+   */
+  async chat(
+    userText: string,
+    from = 'console',
+    onDelta: (id: string, delta: string) => void = () => {},
+    onEvent: (e: { type: 'tool'; name: string; result: string } | { type: 'model'; model: string; vision: boolean }) => void = () => {},
+  ): Promise<ChatMessage> {
     const user: ChatMessage = { id: `m${++this.seq}`, role: 'user', text: userText, at: Date.now(), from };
     this.history.push(user);
+    const replyId = `m${++this.seq}`;
     const ctx = this.getContext();
-    const recent = this.history.slice(-21, -1).map((m) => ({ role: m.role, content: m.text }));
-    const content: unknown[] = [{ type: 'input_text', text: userText }];
-    if (ctx.frame) content.push({ type: 'input_image', image_url: `data:image/jpeg;base64,${ctx.frame.toString('base64')}`, detail: 'low' });
-    const input: unknown[] = [...recent, { role: 'user', content }];
-    const instructions = `${INSTRUCTIONS}\n\nCurrent state:\n${this.stateText(ctx)}`;
+    const vision = needsVision(userText) && Boolean(ctx.frame);
+    const model = vision ? this.models.vision : this.models.fast;
+    onEvent({ type: 'model', model, vision });
 
+    const messages: ChatMsg[] = [{ role: 'system', content: `${INSTRUCTIONS}\n\nCurrent state:\n${this.stateText(ctx)}` }];
+    for (const m of this.history.slice(-21, -1)) messages.push({ role: m.role, content: m.text });
+    if (vision && ctx.frame) {
+      const parts: ChatMsg['content'] = [];
+      for (const r of ctx.refs ?? []) {
+        (parts as Exclude<ChatMsg['content'], string | null>).push({ type: 'text', text: `Reference photo, ${r.label}:` });
+        (parts as Exclude<ChatMsg['content'], string | null>).push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${r.jpeg.toString('base64')}`, detail: 'low' } });
+      }
+      (parts as Exclude<ChatMsg['content'], string | null>).push({ type: 'text', text: `Live camera frame now. ${userText}` });
+      (parts as Exclude<ChatMsg['content'], string | null>).push({ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${ctx.frame.toString('base64')}`, detail: 'low' } });
+      messages.push({ role: 'user', content: parts });
+    } else messages.push({ role: 'user', content: userText });
+
+    const t0 = performance.now();
     let text = '';
+    let usedModel = model;
     for (let round = 0; round < 4; round++) {
-      const data = await this.call(key, instructions, input);
-      const calls = (data.output ?? []).filter((it: { type: string }) => it.type === 'function_call');
-      for (const it of data.output ?? []) if (it.type === 'message') for (const c of it.content ?? []) if (c.type === 'output_text') text += c.text ?? '';
-      if (!calls.length) break;
-      for (const call of calls) {
+      let r;
+      try {
+        r = await streamChat(model, messages, { tools: TOOL_DEFS, maxTokens: 900, onDelta: (d) => { text += d; onDelta(replyId, d); } });
+      } catch (e) {
+        // fall back to the vision model (OpenAI) if the fast vendor fails
+        if (model !== this.models.vision) {
+          usedModel = this.models.vision;
+          r = await streamChat(this.models.vision, messages, { tools: TOOL_DEFS, maxTokens: 900, onDelta: (d) => { text += d; onDelta(replyId, d); } });
+        } else throw e;
+      }
+      if (!r.toolCalls.length) break;
+      messages.push({ role: 'assistant', content: r.text || null, tool_calls: r.toolCalls });
+      for (const call of r.toolCalls as ToolCall[]) {
         let args: Record<string, unknown> = {};
-        try { args = JSON.parse(call.arguments || '{}'); } catch { /* empty */ }
-        const result = this.runTool(call.name, args);
-        onEvent({ type: 'tool', name: call.name, result });
-        input.push({ type: 'function_call', call_id: call.call_id, name: call.name, arguments: call.arguments ?? '{}' });
-        input.push({ type: 'function_call_output', call_id: call.call_id, output: result });
+        try { args = JSON.parse(call.function.arguments || '{}'); } catch { /* empty */ }
+        const result = this.runTool(call.function.name, args);
+        onEvent({ type: 'tool', name: call.function.name, result });
+        messages.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: result });
       }
       text = '';
     }
-    const reply: ChatMessage = { id: `m${++this.seq}`, role: 'assistant', text: text.trim() || 'Done.', at: Date.now() };
+    const reply: ChatMessage = { id: replyId, role: 'assistant', text: stripMarkdown(text) || 'Done.', at: Date.now(), model: usedModel, ms: Math.round(performance.now() - t0) };
     this.history.push(reply);
     if (this.history.length > 60) this.history.splice(0, this.history.length - 60);
     return reply;
-  }
-
-  private async call(key: string, instructions: string, input: unknown[]): Promise<any> {
-    const cached = reasoningCache.get(this.model);
-    const variants: (string | null)[] = cached !== undefined ? [cached] : /^gpt-4/.test(this.model) ? [null] : ['none', 'minimal', 'low', null];
-    let lastErr = '';
-    for (const effort of variants) {
-      const res = await fetch('https://api.openai.com/v1/responses', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
-        body: JSON.stringify({ model: this.model, instructions, input, tools: TOOL_DEFS, tool_choice: 'auto', max_output_tokens: 900, store: false, ...(effort ? { reasoning: { effort } } : {}) }),
-        signal: AbortSignal.timeout(30_000),
-      });
-      const body = await res.text();
-      if (res.status === 400 && effort && /reasoning|effort/i.test(body)) { lastErr = body.slice(0, 200); continue; }
-      if (!res.ok) throw new Error(`chat HTTP ${res.status}: ${body.slice(0, 300)}`);
-      reasoningCache.set(this.model, effort);
-      return JSON.parse(body);
-    }
-    throw new Error(`chat: no reasoning variant accepted: ${lastErr}`);
   }
 }
 

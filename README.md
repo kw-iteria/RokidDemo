@@ -11,11 +11,17 @@ desktop console walk you through the motion:
 3. **Open the plate press** — after 10 s, a pulsing frame and beeps until the lid is seen open.
 4. **Plate press motion completed** — check mark, done. It returns to standby after 12 s.
 
-**Talking to the assistant.** The console has a chat panel with a microphone button; on the glasses,
-tap the temple button, speak, and the reply is shown and read aloud. The assistant sees the live
-frame and the workflow state, and can start/stop the workflow, change the press time, pick models,
-or save the current view as a reference photo. Double-tap the temple button to start or restart
-without talking.
+**Talking to the assistant.** The console has a chat panel with a microphone button; on the glasses
+(the app is called **Iteria**), tap the temple button, speak, and the reply is shown and read aloud.
+It is a general chatbot that also runs the workflow: start/stop it, change the press time, pick
+models, save the current view as a reference photo, or just ask anything. Double-tap the temple
+button to start or restart without talking.
+
+Two chat models, chosen per message: plain conversation and commands go to a fast text model
+(default `groq/qwen/qwen3.8-27b`, ~0.2–0.5 s per reply including tool calls); questions about
+what the camera sees go to a vision model (default `gpt-4.1-mini`, ~0.8–1 s) with the live frame
+and reference photos attached. Replies stream token by token to the console. Both are selectable
+in the console; `tools/bench_chat.ts` measures every vendor.
 
 ```
 Rokid glasses (Kotlin/Compose)  ──JPEG frames over WebSocket──▶  server (Node, no build step)  ──▶  Gemini / OpenAI vision

@@ -103,6 +103,27 @@ close detected 434–564 ms after the closing frame (and backdated), 0 errors.
 * On the demo clip the countdown now starts at the moment the hand leaves the closed lid
   (3 verdicts over ~0.8 s, backdated), not while the lid is still coming down.
 
+## Chat latency (2026-09-25, `tools/bench_chat.ts`, median of 3, streaming)
+
+| model | one-sentence fact (first token / total) | tool call "start workflow" | three tips |
+|---|---|---|---|
+| groq/qwen/qwen3.8-27b (**default text model**) | 76 / 130 ms | 136 ms, 3/3 correct | 185 ms |
+| cerebras/gpt-oss-120b | 236 / 243 ms | 179 ms, 3/3 | 208 ms |
+| groq/openai/gpt-oss-120b | 259 / 304 ms | 249 ms, 3/3 | 316 ms |
+| groq/openai/gpt-oss-20b | 298 / 318 ms | 205 ms, 3/3 | 155 ms |
+| cerebras/qwen-3.8-27b | 299 / 320 ms | 248 ms, 3/3 | 324 ms |
+| gpt-4.1-mini (**default vision model**) | 320 / 485 ms | 512 ms, 3/3 | 658 ms |
+| xai/grok-4.20 non-reasoning | 439 / 555 ms | 574 ms, 3/3 | 785 ms |
+| gpt-4.1-nano | 423 / 622 ms | 526 ms | 604 ms |
+| gemini-3.5-flash-lite | 541 / 628 ms | 571 ms | 1.3 s |
+| gpt-5.4-mini / 5.4-nano / 4o-mini / 5-nano | 0.65–0.73 s | 0.46–0.66 s | 0.67–1.0 s |
+| gemini-3.8-flash | — | — | quota 429 |
+
+Routing: `needsVision()` (words like see / look / camera / frame / open or closed) sends the message
+with the live frame plus one open and one closed reference photo to the vision model; everything
+else goes to the text model, which also handles tool calls. If the text vendor fails, the vision
+model answers. Replies are stripped of markdown because they are spoken on the glasses.
+
 ## Timing observed on the replay (assets/press_demo_640.mp4)
 * press seen → "Please close" in ~1.0 s after the first frame
 * lid closed → COUNTDOWN 0.9 s later, countdown backdated by that 0.9 s (ring starts at ~9.1)
