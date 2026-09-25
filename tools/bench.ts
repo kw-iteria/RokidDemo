@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { loadEnv } from '../server/src/env.ts';
-import { CANDIDATE_MODELS, classifyFrame, type LidState } from '../server/src/vision.ts';
+import { CANDIDATE_MODELS, classifyFrame, closeSessions, type LidState } from '../server/src/vision.ts';
 
 loadEnv();
 const args = new Map<string, string>();
@@ -102,3 +102,5 @@ mkdirSync(outDir, { recursive: true });
 const file = resolve(outDir, `bench_${new Date().toISOString().replace(/[:.]/g, '-')}_w${width}_${mediaArg.toLowerCase()}${useRefs ? '_refs' : ''}.json`);
 writeFileSync(file, JSON.stringify({ width, refs: useRefs, frames: frameIds, summary }, null, 2));
 console.log('saved', file);
+closeSessions();
+process.exit(0);

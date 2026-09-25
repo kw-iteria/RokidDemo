@@ -4,7 +4,8 @@ import { classifyFrame, type ClassifyResult, type Verdict } from './vision.ts';
 import type { Frame } from './frames.ts';
 
 export interface DetectorConfig {
-  models: string[];        // 1 model, or several to race per frame
+  models: string[];        // 1 model, or several: raced per frame, or primary + fallbacks (mode)
+  mode?: 'race' | 'primary';
   maxInflight: number;     // concurrent frame evaluations
   minIntervalMs: number;   // minimum spacing between submissions
   prompt?: string;
@@ -91,16 +92,27 @@ export class Detector {
     const ac = new AbortController();
     const models = this.config.models.length ? this.config.models : ['gemini-3.1-flash-lite'];
     try {
-      const attempts = models.map((m) =>
+      const attempt = (m: string) =>
         classifyFrame(m, frame.jpeg, { prompt: this.config.prompt, signal: ac.signal, timeoutMs: this.config.timeoutMs, refs: this.config.refs }).then((r) => {
           if (!r.verdict) {
             if (r.error !== 'aborted') { const pm = this.perModel.get(m) ?? { wins: 0, lat: [], errors: 0 }; pm.errors++; this.perModel.set(m, pm); }
             throw new Error(`${m}: ${r.error ?? 'no verdict'}`);
           }
           return r as ClassifyResult & { verdict: Verdict };
-        }),
-      );
-      const winner = await Promise.any(attempts);
+        });
+      let winner: ClassifyResult & { verdict: Verdict };
+      if ((this.config.mode ?? 'primary') === 'race' || models.length === 1) {
+        winner = await Promise.any(models.map(attempt));
+      } else {
+        // primary + fallbacks: the accurate model answers; a fallback only runs if it fails
+        const errors: Error[] = [];
+        let found: (ClassifyResult & { verdict: Verdict }) | null = null;
+        for (const m of models) {
+          try { found = await attempt(m); break; } catch (e) { errors.push(e as Error); }
+        }
+        if (!found) throw new AggregateError(errors, 'all models failed');
+        winner = found;
+      }
       { const pm = this.perModel.get(winner.model) ?? { wins: 0, lat: [], errors: 0 }; pm.wins++; pm.lat.push(winner.latency_ms); if (pm.lat.length > 40) pm.lat.shift(); this.perModel.set(winner.model, pm); }
       ac.abort(); // cancel the slower racers
       const latency_ms = performance.now() - t0;

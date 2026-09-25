@@ -7,7 +7,7 @@
     live: $('live'), liveEmpty: $('live-empty'), badge: $('verdict-badge'), ribbon: $('ribbon'),
     hud: $('hud'), arc: $('dial-arc'), number: $('hud-number'), message: $('hud-message'), sub: $('hud-sub'),
     footL: $('hud-foot-left'), footR: $('hud-foot-right'), timing: $('timing'),
-    source: $('source'), model: $('model'), model2: $('model2'), inflight: $('inflight'), interval: $('interval'),
+    source: $('source'), model: $('model'), model2: $('model2'), mode: $('mode'), inflight: $('inflight'), interval: $('interval'),
     confirm: $('confirm'), dwell: $('dwell'), hosts: $('hosts'), log: $('log'),
     prompt: $('prompt'), promptBox: $('prompt-box'),
     chatLog: $('chat-log'), chatForm: $('chat-form'), chatInput: $('chat-input'), chatThinking: $('chat-thinking'), mic: $('btn-mic'), hudChat: $('hud-chat'),
@@ -57,7 +57,7 @@
     els.srcPill.textContent = active ? `${active.kind} ${active.fps} fps` : idleGlasses ? `glasses connected, camera: ${idleGlasses.info.camera.status}${idleGlasses.info.camera.permission === false ? ' (permission missing)' : ''}` : 'no camera';
     els.srcPill.className = active ? 'pill ok' : idleGlasses ? 'pill warn' : 'pill';
     els.srcPill.title = idleGlasses && idleGlasses.info.camera.error ? idleGlasses.info.camera.error : '';
-    els.modelPill.textContent = msg.config.models.join(' + ');
+    els.modelPill.textContent = msg.config.models.join(msg.config.mode === 'race' ? ' ∥ ' : ' → ');
     els.latPill.textContent = msg.stats.p50_ms ? `${msg.stats.p50_ms} ms · ${msg.stats.decisions_per_s}/s` : '— ms';
     els.hosts.textContent = msg.hosts.length ? `glasses find this Mac at ${msg.hosts.map((h) => `${h}:${msg.port}`).join(' or ')}` : '';
     if (!state.editing) syncControls(msg);
@@ -75,6 +75,7 @@
   function syncControls(msg) {
     els.model.value = msg.config.models[0] || '';
     els.model2.value = msg.config.models[1] || '';
+    els.mode.value = msg.config.mode || 'primary';
     els.inflight.value = msg.config.maxInflight;
     els.interval.value = msg.config.minIntervalMs;
     els.confirm.value = msg.config.params.confirmations;
@@ -126,7 +127,7 @@
       ['Errors', String(st.errors)],
       ['Run', `${s.run} · ${s.phase.toLowerCase().replace('_', ' ')}`],
       ['Last close detection', closedEv ? closedEv.text.replace('closed detected ', '') : '—'],
-      ['Race wins', Object.entries(st.per_model || {}).map(([m, v]) => `${m} ${v.wins} (${v.p50_ms} ms${v.errors ? `, ${v.errors} err` : ''})`).join(' · ') || '—'],
+      ['Verdicts by model', Object.entries(st.per_model || {}).map(([m, v]) => `${m} ${v.wins} (${v.p50_ms} ms${v.errors ? `, ${v.errors} err` : ''})`).join(' · ') || '—'],
     ].map(([k, v]) => `<div><span>${k}</span>${v}</div>`).join('');
   }
 
@@ -197,10 +198,11 @@
   loadModels();
   const pushConfig = () => cmd({ cmd: 'set', config: {
     models: [els.model.value, els.model2.value].filter(Boolean),
+    mode: els.mode.value,
     maxInflight: Number(els.inflight.value), minIntervalMs: Number(els.interval.value),
     params: { confirmations: Number(els.confirm.value), countdown_ms: Number(els.dwell.value) * 1000 },
   } });
-  for (const el of [els.model, els.model2, els.inflight, els.interval, els.confirm, els.dwell]) {
+  for (const el of [els.model, els.model2, els.mode, els.inflight, els.interval, els.confirm, els.dwell]) {
     el.addEventListener('focus', () => (state.editing = true));
     el.addEventListener('blur', () => (state.editing = false));
     el.addEventListener('change', pushConfig);

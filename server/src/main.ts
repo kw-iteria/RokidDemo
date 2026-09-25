@@ -23,6 +23,7 @@ const REFS_DIR = resolve(ROOT, 'server', 'refs');
 
 interface AppConfig {
   models: string[];
+  mode: 'race' | 'primary';
   maxInflight: number;
   minIntervalMs: number;
   timeoutMs: number;
@@ -31,7 +32,8 @@ interface AppConfig {
   params: SessionParams;
 }
 const config: AppConfig = {
-  models: (process.env.PRESS_MODELS ?? 'gpt-realtime-mini,gpt-4.1-mini').split(',').map((s) => s.trim()).filter(Boolean),
+  models: (process.env.PRESS_MODELS ?? 'gpt-5.4-mini,gpt-4.1-mini').split(',').map((s) => s.trim()).filter(Boolean),
+  mode: (process.env.PRESS_MODE as 'race' | 'primary') ?? 'primary',
   maxInflight: 4,
   minIntervalMs: 150,
   timeoutMs: 8000,
@@ -43,8 +45,8 @@ if (existsSync(CONFIG_FILE)) {
   try { Object.assign(config, JSON.parse(readFileSync(CONFIG_FILE, 'utf8'))); } catch (e) { console.warn('config.local.json ignored:', (e as Error).message); }
 }
 function persist(): void {
-  const { models, maxInflight, minIntervalMs, timeoutMs, prompt, params } = config;
-  writeFileSync(CONFIG_FILE, JSON.stringify({ models, maxInflight, minIntervalMs, timeoutMs, prompt, params }, null, 2));
+  const { models, mode, maxInflight, minIntervalMs, timeoutMs, prompt, params } = config;
+  writeFileSync(CONFIG_FILE, JSON.stringify({ models, mode, maxInflight, minIntervalMs, timeoutMs, prompt, params }, null, 2));
 }
 
 // ----------------------------------------------------------------------------- core
@@ -57,7 +59,7 @@ function loadRefs(): { label: string; jpeg: Buffer }[] {
   }));
 }
 const session = new PressSession(config.params);
-const detector = new Detector({ models: config.models, maxInflight: config.maxInflight, minIntervalMs: config.minIntervalMs, prompt: config.prompt, timeoutMs: config.timeoutMs, refs: loadRefs() });
+const detector = new Detector({ models: config.models, mode: config.mode, maxInflight: config.maxInflight, minIntervalMs: config.minIntervalMs, prompt: config.prompt, timeoutMs: config.timeoutMs, refs: loadRefs() });
 
 interface Source { id: string; kind: 'glasses' | 'webcam' | 'replay'; ws?: WebSocket; lastFrameAt: number; frames: number[]; seq: number; info?: unknown }
 const sources = new Map<string, Source>();
@@ -124,7 +126,7 @@ function stateMessage(): string {
     server_now: now,
     session: session.snapshot(now),
     stats: detector.stats(),
-    config: { models: config.models, maxInflight: config.maxInflight, minIntervalMs: config.minIntervalMs, timeoutMs: config.timeoutMs, source: config.source, params: config.params },
+    config: { models: config.models, mode: config.mode, maxInflight: config.maxInflight, minIntervalMs: config.minIntervalMs, timeoutMs: config.timeoutMs, source: config.source, params: config.params },
     sources: [...sources.values()].map((s) => ({ id: s.id, kind: s.kind, fps: sourceFps(s), alive: now - s.lastFrameAt < 2500, active: activeSourceId() === s.id, info: s.info ?? null })),
     camera: { live: Boolean(activeSourceId()), source: activeSourceId() },
     hosts: lanAddresses(),
@@ -222,13 +224,14 @@ function applyCommand(msg: Record<string, unknown>, from: string): void {
     case 'set': {
       const c = (msg.config ?? {}) as Partial<AppConfig>;
       if (Array.isArray(c.models) && c.models.length) config.models = c.models.map(String);
+      if (c.mode === 'race' || c.mode === 'primary') config.mode = c.mode;
       if (typeof c.maxInflight === 'number') config.maxInflight = Math.max(1, Math.min(6, c.maxInflight));
       if (typeof c.minIntervalMs === 'number') config.minIntervalMs = Math.max(50, c.minIntervalMs);
       if (typeof c.timeoutMs === 'number') config.timeoutMs = Math.max(1000, c.timeoutMs);
       if (typeof c.prompt === 'string' && c.prompt.trim()) config.prompt = c.prompt;
       if (typeof c.source === 'string') config.source = c.source;
       if (c.params && typeof c.params === 'object') { config.params = { ...config.params, ...c.params }; session.setParams(config.params); }
-      Object.assign(detector.config, { models: config.models, maxInflight: config.maxInflight, minIntervalMs: config.minIntervalMs, prompt: config.prompt, timeoutMs: config.timeoutMs });
+      Object.assign(detector.config, { models: config.models, mode: config.mode, maxInflight: config.maxInflight, minIntervalMs: config.minIntervalMs, prompt: config.prompt, timeoutMs: config.timeoutMs });
       persist();
       log('info', `config updated (${from}): models=${config.models.join('+')} inflight=${config.maxInflight} interval=${config.minIntervalMs}ms source=${config.source}`);
       break;

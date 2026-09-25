@@ -297,6 +297,12 @@ async function classifyCompat(model: string, jpeg: Buffer, opts: ClassifyOptions
   }
 }
 
+/** Close persistent sessions so short-lived tools (benchmarks) can exit. */
+export function closeSessions(): void {
+  for (const s of realtimeSessions.values()) s.close();
+  realtimeSessions.clear();
+}
+
 export async function classifyFrame(model: string, jpeg: Buffer, opts: ClassifyOptions = {}): Promise<ClassifyResult> {
   const provider = providerFor(model);
   try {
