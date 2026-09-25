@@ -46,7 +46,7 @@ const config: AppConfig = {
   mode: (process.env.PRESS_MODE as 'race' | 'primary' | 'local') ?? (localAvailable() ? 'local' : 'primary'),
   camera: { rotation: 0, mirror: false, longEdge: 720, fps: 6, aspect: 'native' },
   chatFast: process.env.CHAT_FAST_MODEL ?? 'groq/qwen/qwen3.8-27b',
-  chatVision: process.env.CHAT_VISION_MODEL ?? 'gpt-4.1-mini',
+  chatVision: process.env.CHAT_VISION_MODEL ?? 'gpt-5.4-mini',
   voice: { ...DEFAULT_VOICE },
   maxInflight: 6,
   minIntervalMs: 100,

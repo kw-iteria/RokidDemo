@@ -112,11 +112,11 @@ close detected 434–564 ms after the closing frame (and backdated), 0 errors.
 | groq/openai/gpt-oss-120b | 259 / 304 ms | 249 ms, 3/3 | 316 ms |
 | groq/openai/gpt-oss-20b | 298 / 318 ms | 205 ms, 3/3 | 155 ms |
 | cerebras/qwen-3.8-27b | 299 / 320 ms | 248 ms, 3/3 | 324 ms |
-| gpt-4.1-mini (**default vision model**) | 320 / 485 ms | 512 ms, 3/3 | 658 ms |
+| gpt-4.1-mini | 320 / 485 ms | 512 ms, 3/3 | 658 ms |
 | xai/grok-4.20 non-reasoning | 439 / 555 ms | 574 ms, 3/3 | 785 ms |
 | gpt-4.1-nano | 423 / 622 ms | 526 ms | 604 ms |
 | gemini-3.5-flash-lite | 541 / 628 ms | 571 ms | 1.3 s |
-| gpt-5.4-mini / 5.4-nano / 4o-mini / 5-nano | 0.65–0.73 s | 0.46–0.66 s | 0.67–1.0 s |
+| gpt-5.4-mini (**default for camera questions**: most accurate on the press) / 5.4-nano / 4o-mini / 5-nano | 0.65–0.73 s | 0.46–0.66 s | 0.67–1.0 s |
 | gemini-3.8-flash | — | — | quota 429 |
 
 Routing: `needsVision()` (words like see / look / camera / frame / open or closed) sends the message

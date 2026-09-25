@@ -24,7 +24,7 @@ button to start or restart without talking. "Start / stop the workflow" in any w
 
 Two chat models, chosen per message: plain conversation and commands go to a fast text model
 (default `groq/qwen/qwen3.8-27b`, ~0.2–0.5 s per reply including tool calls); questions about
-what the camera sees go to a vision model (default `gpt-4.1-mini`, ~0.8–1 s) with the live frame
+what the camera sees go to a vision model (default `gpt-5.4-mini`, ~1 s) with the live frame
 and reference photos attached. Replies stream token by token to the console. Both are selectable
 in the console; `tools/bench_chat.ts` measures every vendor.
 
