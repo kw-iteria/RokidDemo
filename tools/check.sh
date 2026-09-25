@@ -30,9 +30,10 @@ fi
 
 echo "Link"
 if curl -s -m 2 localhost:8787/api/state >/dev/null; then
-  curl -s localhost:8787/api/state | python3 - <<'PY'
+  STATE=$(mktemp); curl -s localhost:8787/api/state > "$STATE"
+  python3 - "$STATE" <<'PY'
 import sys, json
-d = json.load(sys.stdin)
+d = json.load(open(sys.argv[1]))
 g = [s for s in d["sources"] if s["kind"] == "glasses"]
 if g:
     for s in g:
