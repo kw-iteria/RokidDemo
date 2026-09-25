@@ -7,11 +7,16 @@ import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import sharp from 'sharp';
 import { embed, HEAD_FILE, predict, type Head } from '../server/src/local.ts';
-import { cropAround, cropJpeg, boxArea } from '../server/src/zoom.ts';
+import { cropAround, cropJpeg, cropTight, boxArea } from '../server/src/zoom.ts';
 
 const args = new Map<string, string>();
 for (let i = 2; i < process.argv.length; i++) if (process.argv[i].startsWith('--')) args.set(process.argv[i].slice(2), process.argv[i + 1] ?? 'true');
-const dump = JSON.parse(readFileSync(resolve(args.get('dump') ?? 'bench-results/bboxes_gpt54.json'), 'utf8')) as { path: string; clip: string; truth: string; verdict: { press_visible: boolean; bbox?: number[] } | null }[];
+type DumpRow = { path: string; clip: string; truth: string; verdict: { press_visible: boolean; bbox?: number[] } | null };
+// one or more cloud-verdict dumps (comma separated): frames + bounding boxes
+const dump: DumpRow[] = [];
+for (const f of (args.get('dump') ?? 'bench-results/bboxes_gpt54.json,bench-results/bboxes_far.json').split(',')) {
+  try { dump.push(...(JSON.parse(readFileSync(resolve(f.trim()), 'utf8')) as DumpRow[])); } catch { console.log(`(no dump ${f})`); }
+}
 // Real frames labelled by the cloud verifier during live use (server writes them to data/live).
 import { existsSync, readdirSync } from 'node:fs';
 const liveDir = resolve(args.get('live') ?? 'data/live');
@@ -58,9 +63,12 @@ for (const row of dump) {
   samples.push({ x: await embed(jpeg), y, clip: row.clip, kind: 'full' });
   // zoom crop around the press (as the live pipeline does when it is small), plus blurry versions of it
   if (box && y !== 'none') {
-    const crop = await cropJpeg(jpeg, cropAround(box as [number, number, number, number]));
+    // tight crop, as the live local classifier sees it, plus blurry versions for distance
+    const crop = await cropJpeg(jpeg, cropTight(box as [number, number, number, number]), 320);
     samples.push({ x: await embed(crop), y, clip: row.clip, kind: 'crop' });
-    for (const w of [120, 72]) samples.push({ x: await embed(await degrade(crop, w)), y, clip: row.clip, kind: `crop@${w}` });
+    for (const w of [110, 64]) samples.push({ x: await embed(await degrade(crop, w)), y, clip: row.clip, kind: `crop@${w}` });
+    const wide = await cropJpeg(jpeg, cropAround(box as [number, number, number, number]));
+    samples.push({ x: await embed(wide), y, clip: row.clip, kind: 'wide' });
   }
   // background crop -> none
   if (y !== 'none') { const bg = await randomBackgroundCrop(jpeg, box); if (bg) samples.push({ x: await embed(bg), y: 'none', clip: row.clip, kind: 'bg' }); }
@@ -103,6 +111,21 @@ for (const held of clips) {
 }
 const acc = correct / total;
 console.log(`leave-one-clip-out accuracy: ${(acc * 100).toFixed(1)}% (${correct}/${total})`);
+// In-domain estimate for the real setup: 5-fold over the real glasses frames (live + far clips),
+// each fold trained on all other samples. This is what to watch as more live frames accumulate.
+const isReal = (s: Sample) => s.clip === 'live' || /far/.test(s.clip);
+const real = samples.filter(isReal);
+if (real.length >= 20) {
+  let rc = 0, rt = 0; const rconf: Record<string, Record<string, number>> = {};
+  for (let k = 0; k < 5; k++) {
+    const test = real.filter((_, i) => i % 5 === k);
+    const trainSet = samples.filter((s) => !test.includes(s));
+    const h = train(trainSet);
+    for (const s of test) { const { label } = predict(h, s.x); rt++; if (label === s.y) rc++; rconf[s.y] = rconf[s.y] ?? {}; rconf[s.y][label] = (rconf[s.y][label] ?? 0) + 1; }
+  }
+  const oc = real.filter((s) => s.y === 'open' || s.y === 'closed');
+  console.log(`real-frames 5-fold accuracy: ${((rc / rt) * 100).toFixed(1)}% (${rc}/${rt}); confusion ${JSON.stringify(rconf)}`);
+}
 for (const c of CLASSES) if (perClass[c]) console.log(`  ${c.padEnd(8)} ${perClass[c][0]}/${perClass[c][1]}  confusion: ${JSON.stringify(confusion[c])}`);
 // strict: open vs closed only
 const oc = samples.filter((s) => s.y === 'open' || s.y === 'closed');

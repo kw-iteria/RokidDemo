@@ -2,7 +2,7 @@
 // optionally racing several models per frame and taking the first valid verdict.
 import { classifyFrame, type ClassifyResult, type Verdict } from './vision.ts';
 import type { Frame } from './frames.ts';
-import { boxArea, cropAround, cropJpeg, uncrop, ZOOM_TRIGGER_AREA, type Crop } from './zoom.ts';
+import { boxArea, cropAround, cropJpeg, cropTight, uncrop, ZOOM_TRIGGER_AREA, type Crop } from './zoom.ts';
 import { classifyLocal, localAvailable } from './local.ts';
 
 export interface DetectorConfig {
@@ -124,8 +124,9 @@ export class Detector {
     try {
       let crop: Crop | null = null;
       let jpeg = frame.jpeg;
-      if (this.zoomEnabled && this.lastBox && Date.now() - this.lastBox.at < 4000 && boxArea(this.lastBox.box) < ZOOM_TRIGGER_AREA) {
-        try { crop = cropAround(this.lastBox.box); jpeg = await cropJpeg(frame.jpeg, crop); } catch { crop = null; jpeg = frame.jpeg; }
+      // the local classifier always looks at a tight crop when the press location is known (any size)
+      if (this.zoomEnabled && this.lastBox && Date.now() - this.lastBox.at < 4000) {
+        try { crop = cropTight(this.lastBox.box); jpeg = await cropJpeg(frame.jpeg, crop, 320); } catch { crop = null; jpeg = frame.jpeg; }
       }
       const r = await classifyLocal(jpeg, 0.65);
       const v: Verdict = { ...r.verdict };

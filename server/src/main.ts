@@ -86,6 +86,7 @@ const judgedFrames: Buffer[] = [];
 // Confident cloud verdicts on real glasses frames become training data for the local classifier (data/live).
 const LIVE_DIR = resolve(ROOT, 'data', 'live');
 let lastLiveSave = 0;
+let lastCloudLid: { lid: string; at: number } | null = null;
 function collectLiveLabel(v: { verdict: { press_visible: boolean; lid: string; confidence: number; bbox?: number[] }; frame: Frame; model: string }): void {
   const src = v.frame.header.src ?? '';
   if (!src.startsWith('glasses')) return;
@@ -93,6 +94,8 @@ function collectLiveLabel(v: { verdict: { press_visible: boolean; lid: string; c
   const lid = v.verdict.press_visible ? v.verdict.lid : 'none';
   if (lid !== 'open' && lid !== 'closed' && lid !== 'none') return;
   const now = Date.now();
+  const prev = lastCloudLid; lastCloudLid = { lid, at: v.frame.recv_ts };
+  if (!prev || v.frame.recv_ts - prev.at > 2000 || prev.lid !== lid) return; // only labels the cloud model repeats consistently
   if (now - lastLiveSave < 700) return; // at most ~1.4 frames per second
   lastLiveSave = now;
   try {
