@@ -34,7 +34,8 @@ if (!existsSync(frameDir)) {
   mkdirSync(frameDir, { recursive: true });
   execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', resolve('assets/press_demo_640.mp4'), '-vf', `fps=1,scale=${width}:-2`, '-q:v', '4', resolve(frameDir, 'f_%03d.jpg')]);
 }
-const frames = frameIds.map((id) => ({ id, truth: TRUTH[id], jpeg: readFileSync(resolve(frameDir, `f_${String(id).padStart(3, '0')}.jpg`)) }));
+const frames: { id: number; truth: LidState; jpeg: Buffer; path?: string; clip?: string }[] = frameIds.map((id) => ({ id, truth: TRUTH[id], jpeg: readFileSync(resolve(frameDir, `f_${String(id).padStart(3, '0')}.jpg`)), path: resolve(frameDir, `f_${String(id).padStart(3, '0')}.jpg`), clip: 'demo' }));
+const dumpFile = args.get('dump');
 const refsMax = Number(args.get('refs-max') ?? 99);
 const refs = useRefs
   ? readdirSync(resolve('server/refs')).filter((f) => /^(open|closed)\d*\.jpg$/.test(f)).sort().filter((f, i, arr) => arr.filter((x) => x[0] === f[0]).indexOf(f) < refsMax / 2).map((f) => ({
@@ -45,7 +46,7 @@ const refs = useRefs
 // Extra labelled frame folders: --extra open=dir1,closed=dir2 (every jpg in dir gets that truth).
 for (const spec of (args.get('extra') ?? '').split(',').filter(Boolean)) {
   const [truth, dir] = spec.split('=');
-  for (const f of readdirSync(resolve(dir)).filter((x) => x.endsWith('.jpg')).sort()) frames.push({ id: 200 + frames.length, truth: truth as LidState, jpeg: readFileSync(resolve(dir, f)) });
+  for (const f of readdirSync(resolve(dir)).filter((x) => x.endsWith('.jpg')).sort()) frames.push({ id: 200 + frames.length, truth: truth as LidState, jpeg: readFileSync(resolve(dir, f)), path: resolve(dir, f), clip: dir });
 }
 // --crop: judge a crop around the bright box (what the live zoom would send), not the whole frame
 if (args.get('crop') === 'true') {
@@ -66,7 +67,7 @@ if (args.get('crop') === 'true') {
 }
 // Negative images (no press at all): expect press_visible=false.
 const negDir = args.get('negatives');
-if (negDir) for (const f of readdirSync(resolve(negDir)).filter((x) => x.endsWith('.jpg')).sort()) frames.push({ id: 100 + frames.length, truth: 'none' as LidState, jpeg: readFileSync(resolve(negDir, f)) });
+if (negDir) for (const f of readdirSync(resolve(negDir)).filter((x) => x.endsWith('.jpg')).sort()) frames.push({ id: 100 + frames.length, truth: 'none' as LidState, jpeg: readFileSync(resolve(negDir, f)), path: resolve(negDir, f), clip: 'negatives' });
 
 let lastStart = 0;
 async function runPool<T, R>(items: T[], n: number, fn: (t: T) => Promise<R>): Promise<R[]> {
@@ -118,6 +119,7 @@ for (const model of models) {
   console.log(rows.join('\n'));
   const first = results.find((r) => r.error);
   if (first) console.log('  first error:', first.error);
+  if (dumpFile) writeFileSync(dumpFile, JSON.stringify(results.map((r, i) => ({ path: frames[i].path, clip: frames[i].clip, truth: frames[i].truth, verdict: r.verdict, latency_ms: Math.round(r.latency_ms) })), null, 1));
 }
 summary.sort((a, b) => (a.p50_ms as number) - (b.p50_ms as number));
 console.log('\n\nSUMMARY (sorted by p50 latency; strict_acc excludes the ambiguous partial frames)');
