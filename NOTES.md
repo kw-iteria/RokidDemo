@@ -64,11 +64,22 @@ close detected 434–564 ms after the closing frame (and backdated), 0 errors.
   photos (3 open / 3 closed, phone + glasses perspectives) in every request; strictly consecutive
   confirmations; no single-verdict shortcut; a close needs the box to have been seen open first;
   standby until the workflow is started.
-* Benchmark (25 demo frames + 8 negatives, 2 refs): gpt-4.1-mini strict 95%, 0/7 false positives on
-  unrelated images; gpt-realtime-mini strict 80%, 0/7 false positives but it confuses ~1 in 7 closed
-  frames for open. The new prompt WITHOUT reference photos collapses (4.1-mini says "not visible" on
-  everything), so references are mandatory. See `bench-results/ext_refs6_run1.log` for the six-photo run
-  including the new open/closed clips.
+* Benchmark with six reference photos on 68 labelled frames from all three clips (corrected
+  orientation) plus 8 negatives (`bench-results/ext_refs6_run2.log`):
+
+  | model | p50 | strict | exact | false positives | notes |
+  |---|---|---|---|---|---|
+  | gpt-5.4-mini | 1.1 s | **100%** | 93% | 0/4 on unrelated images (the one "hit" is a crop that still shows part of the lid) | new default primary |
+  | gpt-4.1-mini | 0.95 s | 87% | 85% | 1/4 | fallback when the primary fails |
+  | gpt-realtime-mini | 0.77 s | 52% | 32% | — | collapses with several reference photos (prose answers, "open" on closed frames); no longer default |
+
+  The new prompt WITHOUT reference photos collapses (4.1-mini says "not visible" on everything), so
+  references are mandatory. Detection mode is now "primary + fallback" instead of a race: a race
+  returns the fastest model's answer, which was the least accurate one.
+* Cost of the accuracy: verdicts take ~1.1 s instead of ~0.45 s, so a close is confirmed about
+  1.5–2 s after the lid goes down (the countdown is backdated, so the 10 s is still exact) and the
+  completion shows ~1.5 s after the lid opens. If speed matters more than certainty, switch the console
+  to "raced" with gpt-realtime-mini and remove all but two reference photos.
 
 ## Timing observed on the replay (assets/press_demo_640.mp4)
 * press seen → "Please close" in ~1.0 s after the first frame
