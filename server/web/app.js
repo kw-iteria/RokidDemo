@@ -102,7 +102,7 @@
     els.mode.value = msg.config.mode || 'primary';
     if (msg.config.chatFast) { els.chatFast.value = msg.config.chatFast; els.chatVision.value = msg.config.chatVision; }
     if (msg.config.voice) { els.voiceName.value = msg.config.voice.voice; els.voiceSpeed.value = msg.config.voice.speed; els.voiceEnabled.value = String(msg.config.voice.enabled); }
-    if (msg.config.camera) { els.camRot.value = String(msg.config.camera.rotation); els.camMirror.value = String(msg.config.camera.mirror); els.camAspect.value = msg.config.camera.aspect || 'native'; els.camEdge.value = msg.config.camera.longEdge; els.camFps.value = msg.config.camera.fps; }
+    if (msg.config.camera) { if (els.camRot) els.camRot.value = String(msg.config.camera.rotation); if (els.camMirror) els.camMirror.value = String(msg.config.camera.mirror); if (els.camAspect) els.camAspect.value = msg.config.camera.aspect || 'native'; els.camEdge.value = msg.config.camera.longEdge; els.camFps.value = msg.config.camera.fps; }
     els.inflight.value = msg.config.maxInflight;
     els.interval.value = msg.config.minIntervalMs;
     els.confirm.value = msg.config.params.confirmations;
@@ -241,8 +241,9 @@
     el.addEventListener('change', pushConfig);
   }
   els.source.addEventListener('change', () => cmd({ cmd: 'set', config: { source: els.source.value } }));
-  const pushCamera = () => cmd({ cmd: 'set_camera', camera: { rotation: Number(els.camRot.value), mirror: els.camMirror.value === 'true', aspect: els.camAspect.value, longEdge: Number(els.camEdge.value), fps: Number(els.camFps.value) } });
-  for (const el of [els.camRot, els.camMirror, els.camAspect, els.camEdge, els.camFps]) {
+  const cam = () => (state.snap && state.snap.config.camera) || { rotation: 0, mirror: false, aspect: 'native' };
+  const pushCamera = () => cmd({ cmd: 'set_camera', camera: { rotation: els.camRot ? Number(els.camRot.value) : cam().rotation, mirror: els.camMirror ? els.camMirror.value === 'true' : cam().mirror, aspect: els.camAspect ? els.camAspect.value : cam().aspect, longEdge: Number(els.camEdge.value), fps: Number(els.camFps.value) } });
+  for (const el of [els.camRot, els.camMirror, els.camAspect, els.camEdge, els.camFps].filter(Boolean)) {
     el.addEventListener('focus', () => (state.editing = true));
     el.addEventListener('blur', () => (state.editing = false));
     el.addEventListener('change', pushCamera);

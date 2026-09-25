@@ -139,22 +139,13 @@
     <span class="muted">Plain conversation and commands go to the text model; questions about what the camera sees go to the vision model.</span>
   </div>
   <div class="row">
-    <label>Glasses camera rotation
-      <select id="cam-rot"><option value="0">as delivered</option><option value="90">turn 90° clockwise</option><option value="180">turn 180°</option><option value="270">turn 90° counter-clockwise</option></select>
-    </label>
-    <label>Mirror
-      <select id="cam-mirror"><option value="false">no</option><option value="true">yes</option></select>
-    </label>
-    <label>Frame shape
-      <select id="cam-aspect"><option value="native">as delivered</option><option value="landscape">landscape 16:9 (centre crop)</option><option value="square">square (centre crop)</option></select>
-    </label>
     <label>Frame long edge (px)
       <input id="cam-edge" type="number" min="240" max="1280" step="40" value="480">
     </label>
     <label>Frames per second
       <input id="cam-fps" type="number" min="1" max="15" value="6">
     </label>
-    <span class="muted">Changes apply live on the glasses (app 0.2 or newer).</span>
+    <span class="muted">Applies live on the glasses.</span>
   </div>
 
   <ol id="log" class="log"></ol>
