@@ -124,7 +124,7 @@ private fun Subtitle(state: HudState, u: Dp, modifier: Modifier) {
             }
             "IDLE" -> {
                 val busy = state.speaking || state.thinking || state.chatStreaming.isNotEmpty() || chatFresh
-                if (!busy) Robot(u)
+                if (!busy) Robot(u, listening = state.listening)
                 if (!state.cameraLive) Line("waiting for camera", u, 0.032f, color = Faint, weight = FontWeight.Normal)
             }
             "COUNTDOWN" -> Line(state.sub, u, 0.042f, color = Dim, weight = FontWeight.Normal)
@@ -146,7 +146,7 @@ private fun Subtitle(state: HudState, u: Dp, modifier: Modifier) {
 
 /** A small friendly robot: round head, two blinking eyes, antenna. Eyes glance around while thinking. */
 @Composable
-private fun Robot(u: Dp, thinking: Boolean = false, size: Dp = u * 0.16f) {
+private fun Robot(u: Dp, thinking: Boolean = false, size: Dp = u * 0.16f, listening: Boolean = true) {
     val blink by rememberInfiniteTransition(label = "blink").animateFloat(0f, 1f, infiniteRepeatable(tween(3400, easing = LinearEasing)), label = "b")
     val glance by rememberInfiniteTransition(label = "glance").animateFloat(-1f, 1f, infiniteRepeatable(tween(1100, easing = LinearEasing), RepeatMode.Reverse), label = "g")
     val bob by rememberInfiniteTransition(label = "bob").animateFloat(0f, 1f, infiniteRepeatable(tween(1600, easing = LinearEasing), RepeatMode.Reverse), label = "o")
@@ -156,7 +156,8 @@ private fun Robot(u: Dp, thinking: Boolean = false, size: Dp = u * 0.16f) {
         val dy = (bob - 0.5f) * h * 0.04f
         // antenna
         drawLine(Ink, Offset(w * 0.5f, h * 0.22f + dy), Offset(w * 0.5f, h * 0.08f + dy), stroke, StrokeCap.Round)
-        drawCircle(Ink, radius = w * 0.06f, center = Offset(w * 0.5f, h * 0.07f + dy))
+        if (listening) drawCircle(Ink, radius = w * 0.06f, center = Offset(w * 0.5f, h * 0.07f + dy))
+        else drawCircle(Ink, radius = w * 0.06f, center = Offset(w * 0.5f, h * 0.07f + dy), style = Stroke(stroke * 0.6f))
         // head
         drawRoundRect(Ink, topLeft = Offset(w * 0.14f, h * 0.22f + dy), size = Size(w * 0.72f, h * 0.62f), cornerRadius = CornerRadius(w * 0.2f), style = Stroke(stroke))
         // ears

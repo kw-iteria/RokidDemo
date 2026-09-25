@@ -45,8 +45,8 @@ const config: AppConfig = {
   chatFast: process.env.CHAT_FAST_MODEL ?? 'groq/qwen/qwen3.8-27b',
   chatVision: process.env.CHAT_VISION_MODEL ?? 'gpt-4.1-mini',
   voice: { ...DEFAULT_VOICE },
-  maxInflight: 4,
-  minIntervalMs: 150,
+  maxInflight: 6,
+  minIntervalMs: 100,
   timeoutMs: 8000,
   prompt: DEFAULT_PROMPT,
   source: 'auto',
@@ -428,13 +428,22 @@ wss.on('connection', (ws, req) => {
       }
       try {
         const msg = JSON.parse(data.toString());
-        if (msg.t === 'hello') { src.info = msg.device ?? msg; log('info', `${id} hello ${JSON.stringify(src.info).slice(0, 160)}`); ws.send(cameraMessage()); ws.send(voiceMessage()); }
+        if (msg.t === 'hello') {
+          src.info = msg.device ?? msg; log('info', `${id} hello ${JSON.stringify(src.info).slice(0, 160)}`); ws.send(cameraMessage()); ws.send(voiceMessage());
+          if (role === 'glasses' && config.voice.enabled) { // a short spoken greeting so the wearer knows the assistant is live and listening
+            const greeter = new Speaker(`greet${Date.now()}`, config.voice, (buf) => { if (ws.readyState === WebSocket.OPEN) ws.send(buf); }, (e) => log('warn', `tts: ${e}`));
+            greeter.end("Hi! I'm listening. Just talk to me.");
+          }
+        }
+        else if (msg.t === 'interrupt') { if (chatInflight) chatInflight.abort(); if (currentSpeaker) { currentSpeaker.cancel(); currentSpeaker = null; } broadcast(JSON.stringify({ t: 'chat.thinking', on: false })); log('info', `${id}: interrupted`); }
         else if (msg.t === 'gesture') { session.gesture(String(msg.name)); log('info', `gesture ${msg.name} from ${id}`); }
         else if (msg.t === 'chat') void handleChat(String(msg.text ?? ''), id);
         else if (msg.t === 'status') {
-          const prev = JSON.stringify((src.info as { camera?: unknown } | undefined)?.camera ?? null);
-          src.info = { ...((src.info as object) ?? {}), camera: msg.camera, voice: msg.voice };
-          if (JSON.stringify(msg.camera ?? null) !== prev) log('info', `${id} camera: ${JSON.stringify(msg.camera)}`);
+          const prevCam = JSON.stringify((src.info as { camera?: unknown } | undefined)?.camera ?? null);
+          const prevMic = JSON.stringify((src.info as { mic?: unknown } | undefined)?.mic ?? null);
+          src.info = { ...((src.info as object) ?? {}), camera: msg.camera, voice: msg.voice, mic: msg.mic };
+          if (JSON.stringify(msg.camera ?? null) !== prevCam) log('info', `${id} camera: ${JSON.stringify(msg.camera)}`);
+          if (msg.mic && JSON.stringify(msg.mic) !== prevMic) log('info', `${id} mic: ${JSON.stringify(msg.mic)}`);
         }
         else if (msg.t === 'cmd') applyCommand(msg, id);
         else if (msg.t === 'ping') ws.send(JSON.stringify({ t: 'pong', ts: msg.ts, server_now: Date.now() }));

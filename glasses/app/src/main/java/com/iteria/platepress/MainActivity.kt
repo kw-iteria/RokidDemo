@@ -28,14 +28,14 @@ class MainActivity : ComponentActivity() {
         if (granted[Manifest.permission.RECORD_AUDIO] == true) model.startListening()
     }
 
-    // Rokid temple button: tap = microphone mute/unmute (it listens all the time otherwise),
-    // double tap = start / restart the workflow, long press (when the system lets it through) = spoken prompts on/off.
+    // Rokid temple button: tap = interrupt the assistant and listen (never mutes),
+    // double tap = start / restart the workflow, long press (when the system lets it through) = microphone mute/unmute.
     private val gestures = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.action) {
-                ACTION_CLICK -> model.toggleMic()
+                ACTION_CLICK -> model.attention()
                 ACTION_DOUBLE_CLICK -> model.gesture("restart")
-                ACTION_LONG_PRESS -> model.toggleVoice()
+                ACTION_LONG_PRESS -> model.toggleMic()
             }
         }
     }
@@ -106,7 +106,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean = when (keyCode) {
-        KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_DPAD_CENTER -> { model.toggleMic(); true }
+        KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_DPAD_CENTER -> { model.attention(); true }
         else -> super.onKeyDown(keyCode, event)
     }
 

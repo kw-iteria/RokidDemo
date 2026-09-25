@@ -35,8 +35,9 @@ if (!existsSync(frameDir)) {
   execFileSync('ffmpeg', ['-v', 'error', '-y', '-i', resolve('assets/press_demo_640.mp4'), '-vf', `fps=1,scale=${width}:-2`, '-q:v', '4', resolve(frameDir, 'f_%03d.jpg')]);
 }
 const frames = frameIds.map((id) => ({ id, truth: TRUTH[id], jpeg: readFileSync(resolve(frameDir, `f_${String(id).padStart(3, '0')}.jpg`)) }));
+const refsMax = Number(args.get('refs-max') ?? 99);
 const refs = useRefs
-  ? readdirSync(resolve('server/refs')).filter((f) => /^(open|closed)\d*\.jpg$/.test(f)).sort().map((f) => ({
+  ? readdirSync(resolve('server/refs')).filter((f) => /^(open|closed)\d*\.jpg$/.test(f)).sort().filter((f, i, arr) => arr.filter((x) => x[0] === f[0]).indexOf(f) < refsMax / 2).map((f) => ({
       label: f.startsWith('open') ? 'the plate press OPEN (lid raised, inside visible)' : 'the plate press CLOSED (lid down, one flat block)',
       jpeg: readFileSync(resolve('server/refs', f)),
     }))
@@ -45,6 +46,23 @@ const refs = useRefs
 for (const spec of (args.get('extra') ?? '').split(',').filter(Boolean)) {
   const [truth, dir] = spec.split('=');
   for (const f of readdirSync(resolve(dir)).filter((x) => x.endsWith('.jpg')).sort()) frames.push({ id: 200 + frames.length, truth: truth as LidState, jpeg: readFileSync(resolve(dir, f)) });
+}
+// --crop: judge a crop around the bright box (what the live zoom would send), not the whole frame
+if (args.get('crop') === 'true') {
+  const { default: sharp } = await import('sharp');
+  for (const f of frames) {
+    try {
+      const img = sharp(f.jpeg); const meta = await img.metadata(); const W = meta.width!, H = meta.height!;
+      const raw = await img.clone().greyscale().raw().toBuffer();
+      let x0 = W, y0 = H, x1 = 0, y1 = 0;
+      for (let y = Math.floor(H * 0.05); y < H * 0.95; y++) for (let x = Math.floor(W * 0.1); x < W * 0.9; x++) if (raw[y * W + x] > 175) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+      if (x1 > x0 + 20 && y1 > y0 + 20) {
+        const m = Math.round(Math.max(x1 - x0, y1 - y0) * 0.35);
+        const left = Math.max(0, x0 - m), top = Math.max(0, y0 - m), width = Math.min(W - left, x1 - x0 + 2 * m), height = Math.min(H - top, y1 - y0 + 2 * m);
+        f.jpeg = await sharp(f.jpeg).extract({ left, top, width, height }).jpeg({ quality: 80 }).toBuffer();
+      }
+    } catch { /* keep full frame */ }
+  }
 }
 // Negative images (no press at all): expect press_visible=false.
 const negDir = args.get('negatives');

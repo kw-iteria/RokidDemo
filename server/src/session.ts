@@ -19,7 +19,7 @@ export interface SessionParams {
 export const DEFAULT_PARAMS: SessionParams = {
   countdown_ms: 10_000,
   confirmations: 2,
-  settle_ms: 1000,
+  settle_ms: 250,
   min_box_area: 0.02,
   motion_max: 0.5,        // a head-mounted camera moves a lot; only clearly blurred/moving frames are skipped
   hand_free_close: true,
@@ -183,7 +183,7 @@ export class PressSession {
      * and none of them may have seen the press tiny.
      */
     const vote = (state: 'open' | 'closed', settle: number) => {
-      const span = Math.max(settle * 1.6, settle + 600);
+      const span = settle + 500; // contradiction lookback: a little longer than the settle time
       const from = ev.frame_ts - span;
       const recent = this.window.filter((w) => w.ts >= from);
       const agree = recent.filter((w) => w.lid === state);

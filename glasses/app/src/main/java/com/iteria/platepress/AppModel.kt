@@ -57,7 +57,9 @@ class AppModel(context: Context) {
                 delay(2000)
                 if (link.connected) {
                     link.ping()
-                    link.sendJson(JSONObject().put("t", "status").put("camera", cameraStatus()).put("voice", sounds.voiceEnabled))
+                    link.sendJson(JSONObject().put("t", "status").put("camera", cameraStatus()).put("voice", sounds.voiceEnabled)
+                        .put("mic", JSONObject().put("enabled", listener.enabled).put("running", listener.running).put("source", listener.source)
+                            .put("noise", listener.noiseFloor.toInt()).put("peak", listener.lastPeak.toInt()).put("utterances", listener.utterances)))
                 }
             }
         }
@@ -114,7 +116,17 @@ class AppModel(context: Context) {
         _state.update { it.copy(listening = listener.enabled) }
     }
 
-    /** Temple tap: mute / unmute the microphone. */
+    /** Temple tap: stop whatever the assistant is saying and listen (never mutes). */
+    fun attention() {
+        player.flush()
+        link.sendJson(JSONObject().put("t", "interrupt"))
+        if (!listener.enabled) { listener.enabled = true; _state.update { it.copy(listening = true) } }
+        if (!listener.running) listener.start()
+        _state.update { it.copy(thinking = false, chatStreaming = "") }
+        sounds.tick()
+    }
+
+    /** Long press: mute / unmute the microphone. */
     fun toggleMic() {
         listener.enabled = !listener.enabled
         _state.update { it.copy(listening = listener.enabled) }
