@@ -50,7 +50,7 @@ export interface SessionSnapshot {
 }
 
 const TEXT: Record<Phase, { message: string; sub: string }> = {
-  IDLE: { message: 'Ready', sub: 'Say "start plate press workflow"' },
+  IDLE: { message: 'How can I help you?', sub: '' },
   SEARCHING: { message: 'Looking for the plate press', sub: 'Look at the press' },
   AWAIT_CLOSE: { message: 'Please close the plate press', sub: '' },
   COUNTDOWN: { message: 'Pressing', sub: 'Keep the press closed' },

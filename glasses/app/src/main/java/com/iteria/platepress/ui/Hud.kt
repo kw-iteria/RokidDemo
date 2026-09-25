@@ -123,8 +123,8 @@ private fun Subtitle(state: HudState, u: Dp, modifier: Modifier) {
                 if (state.host.isNotBlank()) Line(state.host, u, 0.032f, color = Faint, weight = FontWeight.Normal)
             }
             "IDLE" -> {
-                Line(if (state.cameraLive) "Ready" else "Ready · waiting for camera", u, 0.05f, color = Dim, weight = FontWeight.Normal)
-                Line("Tap and say \"start plate press workflow\"", u, 0.034f, color = Faint, weight = FontWeight.Normal)
+                Line("How can I help you?", u, 0.052f, color = Dim, weight = FontWeight.Normal)
+                if (!state.cameraLive) Line("waiting for camera", u, 0.032f, color = Faint, weight = FontWeight.Normal)
             }
             "COUNTDOWN" -> Line(state.sub, u, 0.042f, color = Dim, weight = FontWeight.Normal)
             "AWAIT_OPEN" -> {
