@@ -111,10 +111,10 @@ private fun Subtitle(state: HudState, u: Dp, modifier: Modifier) {
             Spacer(Modifier.height(u * 0.012f))
         }
         when {
-            state.speaking -> Line("Listening…", u, 0.04f, color = Dim.copy(alpha = 0.3f + 0.6f * breathe), weight = FontWeight.Normal)
-            state.chatStreaming.isNotEmpty() -> Bubble(state.chatStreaming, u)
-            state.thinking -> ThinkingBubble(u)
-            chatFresh -> Bubble(state.chatText, u)
+            state.speaking -> Row(verticalAlignment = Alignment.CenterVertically) { Robot(u, size = u * 0.1f); Spacer(Modifier.width(u * 0.02f)); Line("Listening…", u, 0.04f, color = Dim.copy(alpha = 0.3f + 0.6f * breathe), weight = FontWeight.Normal) }
+            state.chatStreaming.isNotEmpty() -> Row(verticalAlignment = Alignment.Bottom) { Robot(u, size = u * 0.1f); Spacer(Modifier.width(u * 0.02f)); Bubble(state.chatStreaming, u) }
+            state.thinking -> Row(verticalAlignment = Alignment.CenterVertically) { Robot(u, thinking = true, size = u * 0.1f); Spacer(Modifier.width(u * 0.02f)); ThinkingBubble(u) }
+            chatFresh -> Row(verticalAlignment = Alignment.Bottom) { Robot(u, size = u * 0.1f); Spacer(Modifier.width(u * 0.02f)); Bubble(state.chatText, u) }
         }
         Spacer(Modifier.height(u * 0.02f))
         when (state.phase) {
@@ -123,7 +123,8 @@ private fun Subtitle(state: HudState, u: Dp, modifier: Modifier) {
                 if (state.host.isNotBlank()) Line(state.host, u, 0.032f, color = Faint, weight = FontWeight.Normal)
             }
             "IDLE" -> {
-                Line("How can I help you?", u, 0.052f, color = Dim, weight = FontWeight.Normal)
+                val busy = state.speaking || state.thinking || state.chatStreaming.isNotEmpty() || chatFresh
+                if (!busy) Robot(u)
                 if (!state.cameraLive) Line("waiting for camera", u, 0.032f, color = Faint, weight = FontWeight.Normal)
             }
             "COUNTDOWN" -> Line(state.sub, u, 0.042f, color = Dim, weight = FontWeight.Normal)
@@ -140,6 +141,37 @@ private fun Subtitle(state: HudState, u: Dp, modifier: Modifier) {
                 Line(state.hint.ifBlank { state.sub }, u, 0.036f, color = Dim, weight = FontWeight.Normal)
             }
         }
+    }
+}
+
+/** A small friendly robot: round head, two blinking eyes, antenna. Eyes glance around while thinking. */
+@Composable
+private fun Robot(u: Dp, thinking: Boolean = false, size: Dp = u * 0.16f) {
+    val blink by rememberInfiniteTransition(label = "blink").animateFloat(0f, 1f, infiniteRepeatable(tween(3400, easing = LinearEasing)), label = "b")
+    val glance by rememberInfiniteTransition(label = "glance").animateFloat(-1f, 1f, infiniteRepeatable(tween(1100, easing = LinearEasing), RepeatMode.Reverse), label = "g")
+    val bob by rememberInfiniteTransition(label = "bob").animateFloat(0f, 1f, infiniteRepeatable(tween(1600, easing = LinearEasing), RepeatMode.Reverse), label = "o")
+    Canvas(Modifier.size(size)) {
+        val w = this.size.width; val h = this.size.height
+        val stroke = w * 0.06f
+        val dy = (bob - 0.5f) * h * 0.04f
+        // antenna
+        drawLine(Ink, Offset(w * 0.5f, h * 0.22f + dy), Offset(w * 0.5f, h * 0.08f + dy), stroke, StrokeCap.Round)
+        drawCircle(Ink, radius = w * 0.06f, center = Offset(w * 0.5f, h * 0.07f + dy))
+        // head
+        drawRoundRect(Ink, topLeft = Offset(w * 0.14f, h * 0.22f + dy), size = Size(w * 0.72f, h * 0.62f), cornerRadius = CornerRadius(w * 0.2f), style = Stroke(stroke))
+        // ears
+        drawRoundRect(Ink, topLeft = Offset(w * 0.02f, h * 0.44f + dy), size = Size(w * 0.1f, h * 0.2f), cornerRadius = CornerRadius(w * 0.04f))
+        drawRoundRect(Ink, topLeft = Offset(w * 0.88f, h * 0.44f + dy), size = Size(w * 0.1f, h * 0.2f), cornerRadius = CornerRadius(w * 0.04f))
+        // eyes: blink briefly once per cycle; glance sideways while thinking
+        val closed = blink > 0.93f
+        val ex = if (thinking) glance * w * 0.04f else 0f
+        val eyeY = h * 0.48f + dy
+        for (cx in listOf(w * 0.36f, w * 0.64f)) {
+            if (closed) drawLine(Ink, Offset(cx - w * 0.07f + ex, eyeY), Offset(cx + w * 0.07f + ex, eyeY), stroke, StrokeCap.Round)
+            else drawCircle(Ink, radius = w * 0.075f, center = Offset(cx + ex, eyeY))
+        }
+        // smile
+        drawArc(Ink, startAngle = 20f, sweepAngle = 140f, useCenter = false, topLeft = Offset(w * 0.36f, h * 0.5f + dy), size = Size(w * 0.28f, h * 0.22f), style = Stroke(stroke, cap = StrokeCap.Round))
     }
 }
 

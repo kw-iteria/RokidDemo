@@ -124,7 +124,7 @@
     const s = state.snap && state.snap.session;
     if (!s) return;
     els.hud.dataset.phase = s.phase;
-    els.message.textContent = s.message;
+    els.message.textContent = s.phase === 'IDLE' ? '' : s.message;
     els.sub.textContent = s.hint || s.sub;
     const lv = s.last_verdict;
     const showVerdict = lv && s.phase !== 'IDLE';

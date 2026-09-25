@@ -12,8 +12,8 @@ android {
         applicationId = "com.iteria.platepress"
         minSdk = 28
         targetSdk = 35
-        versionCode = 7
-        versionName = "0.7"
+        versionCode = 8
+        versionName = "0.8"
         buildConfigField("String", "FALLBACK_HOST", "\"${project.findProperty("platepress.host") ?: ""}\"")
         buildConfigField("int", "SERVER_PORT", "${project.findProperty("platepress.port") ?: 8787}")
     }

@@ -132,3 +132,11 @@ button[aria-pressed="true"] { border-color: rgba(140,207,255,0.5); color: var(--
 .chat-log li.thinking small { margin-left: 8px; }
 @keyframes shimmer { 0%, 100% { opacity: 0.2; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-2px); } }
 .chat-log li.streaming::after { content: "▍"; color: var(--ice); animation: pulse 0.8s ease-in-out infinite; }
+
+/* robot in the glasses mirror */
+.hud .robot { width: 15cqw; height: 15cqw; display: none; fill: none; stroke: var(--phosphor); stroke-width: 6; stroke-linecap: round; animation: bob 1.6s ease-in-out infinite alternate; }
+.hud .robot .fill { fill: var(--phosphor); stroke: none; }
+.hud .robot .eye { animation: blink 3.4s linear infinite; transform-origin: center; transform-box: fill-box; }
+.hud[data-phase="IDLE"] .robot { display: block; }
+@keyframes bob { from { transform: translateY(0); } to { transform: translateY(-2px); } }
+@keyframes blink { 0%, 92%, 100% { transform: scaleY(1); } 95% { transform: scaleY(0.1); } }

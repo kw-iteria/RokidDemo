@@ -78,6 +78,8 @@ const desktops = new Set<WebSocket>();
 const glassesClients = new Set<WebSocket>();
 let latestFrame: Frame | null = null;
 const recentFrames: Frame[] = []; // last few glasses frames, for inspection via /api/frame.jpg?n=
+const recentVerdicts: Record<string, unknown>[] = []; // last judged frames + verdicts: /api/verdicts, /api/judged.jpg?n=
+const judgedFrames: Buffer[] = [];
 let lastRelayAt = 0;
 function cameraMessage(): string { return JSON.stringify({ t: 'camera', ...config.camera }); }
 const logLines: { at: number; level: string; text: string }[] = [];
@@ -129,6 +131,9 @@ function onFrame(source: Source, frame: Frame): void {
 
 detector.onVerdict = (v) => {
   const motion = typeof v.frame.header.motion === 'number' ? v.frame.header.motion : 0;
+  recentVerdicts.push({ at: v.frame.recv_ts, phase: session.phase, ...v.verdict, motion: +motion.toFixed(3), latency_ms: Math.round(v.latency_ms), model: v.model, seq: v.frame.header.seq });
+  judgedFrames.push(v.frame.jpeg);
+  if (recentVerdicts.length > 150) { recentVerdicts.shift(); judgedFrames.shift(); }
   session.onVerdict({ verdict: v.verdict, frame_ts: v.frame.recv_ts, latency_ms: v.latency_ms, model: v.model, seq: v.frame.header.seq, motion });
   broadcast(JSON.stringify({ t: 'verdict', ...v.verdict, motion: +motion.toFixed(3), latency_ms: Math.round(v.latency_ms), model: v.model, seq: v.frame.header.seq, frame_ts: v.frame.recv_ts, server_now: Date.now() }));
 };
@@ -136,6 +141,18 @@ detector.onError = (model, err) => log('warn', `model error (${model}): ${err.sl
 session.onChange((snap, changed) => { if (changed) { log('info', `phase → ${snap.phase}`); broadcastState(); } });
 setInterval(() => { if (session.phase !== 'IDLE' && !activeSourceId()) session.idle('camera lost'); session.tick(); }, 100);
 setInterval(() => broadcastState(), 500);
+// While waiting for a close/open, log a compact summary of what the model has been saying.
+setInterval(() => {
+  if (session.phase !== 'AWAIT_CLOSE' && session.phase !== 'AWAIT_OPEN') return;
+  const since = Date.now() - 5000;
+  const recent = recentVerdicts.filter((r) => (r.at as number) >= since);
+  if (!recent.length) return;
+  const tally = (k: string) => recent.filter((r) => (r.press_visible ? r.lid : 'none') === k).length;
+  const hands = recent.filter((r) => r.hand_on_press).length;
+  const moving = recent.filter((r) => (r.motion as number) > config.params.motion_max).length;
+  const st = session.snapshot().streak;
+  log('info', `${session.phase}: last 5 s → open ${tally('open')}, closed ${tally('closed')}, partial ${tally('partial')}, not seen ${tally('none')}; hand on ${hands}, moving ${moving}; streak ${st.state}×${st.count} (${st.span_ms} ms, hand-free ${st.hand_free}, open seen ${st.open_seen})`);
+}, 5000);
 detector.start();
 
 function stateMessage(): string {
@@ -329,6 +346,12 @@ const server = http.createServer((req, res) => {
   if (url.pathname === '/api/state') return send(200, stateMessage());
   if (url.pathname === '/api/models') return send(200, JSON.stringify({ candidates: CANDIDATE_MODELS, bench: latestBench(), default_prompt: DEFAULT_PROMPT }));
   if (url.pathname === '/api/log') return send(200, JSON.stringify(logLines));
+  if (url.pathname === '/api/verdicts') return send(200, JSON.stringify(recentVerdicts));
+  if (url.pathname === '/api/judged.jpg') {
+    const n = Number(url.searchParams.get('n') ?? 0);
+    const f = judgedFrames[judgedFrames.length - 1 - n];
+    return f ? send(200, f, 'image/jpeg') : send(404, 'no judged frame', 'text/plain');
+  }
   if (url.pathname === '/api/frame.jpg') {
     const n = Number(url.searchParams.get('n') ?? 0);
     const f = recentFrames[recentFrames.length - 1 - n] ?? latestFrame;

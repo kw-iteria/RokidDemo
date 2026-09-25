@@ -19,7 +19,7 @@ export const DEFAULT_PARAMS: SessionParams = {
   countdown_ms: 10_000,
   confirmations: 2,
   settle_ms: 700,
-  motion_max: 0.25,
+  motion_max: 0.5,        // a head-mounted camera moves a lot; only clearly blurred/moving frames are skipped
   hand_free_close: true,
   fast_confidence: 1.01,   // >1 disables the single-verdict shortcut
   backdate: true,
@@ -47,6 +47,7 @@ export interface SessionSnapshot {
   run: number;
   last_verdict: (Verdict & { age_ms: number; latency_ms: number; model: string }) | null;
   events: { at: number; text: string }[];
+  streak: { state: string | null; count: number; span_ms: number; hand_free: number; open_seen: number };
 }
 
 const TEXT: Record<Phase, { message: string; sub: string }> = {
@@ -154,7 +155,8 @@ export class PressSession {
     // Streak tracking: only strictly consecutive identical verdicts count. Anything else
     // (partial, unknown, not visible, the other state) restarts the streak.
     const moving = (ev.motion ?? 0) > this.params.motion_max;
-    const s = !v.press_visible ? 'unknown' : moving && v.lid !== 'unknown' ? 'moving' : v.lid;
+    if (moving && v.press_visible && (v.lid === 'open' || v.lid === 'closed')) { this.emit(false); return; } // blurred / camera moving: neither confirms nor breaks a streak
+    const s = !v.press_visible ? 'unknown' : v.lid;
     const visibleState = v.press_visible && v.confidence >= 0.5 ? 'visible' : 'none';
     if (this.streakState === s) { this.streakCount++; this.streakLastTs = ev.frame_ts; }
     else { this.streakState = s; this.streakCount = 1; this.streakFirstTs = ev.frame_ts; this.streakLastTs = ev.frame_ts; this.handFreeCount = 0; }
@@ -173,17 +175,21 @@ export class PressSession {
       case 'AWAIT_CLOSE':
         // A close counts only after the box was seen open in this run (the closing is observed), or,
         // if it was already closed from the start, after a long unbroken closed streak.
-        if (
-          confirmed('closed') &&
-          (this.openSeen >= this.params.confirmations || this.streakCount >= this.params.confirmations * 3) &&
-          (!this.params.hand_free_close || this.handFreeCount >= this.params.confirmations) &&   // operator has let go
-          this.streakLastTs - (this.params.hand_free_close ? this.handFreeSince : this.streakFirstTs) >= this.params.settle_ms   // lid at rest
-        ) {
-          const restSince = this.params.hand_free_close ? this.handFreeSince : this.streakFirstTs;
+        {
+          const handFree = !this.params.hand_free_close || this.handFreeCount >= this.params.confirmations;
+          const longClosed = this.streakCount >= this.params.confirmations * 4; // hand stays on the lid: accept after a long unbroken closed streak
+          const restSince = handFree && this.params.hand_free_close ? this.handFreeSince : this.streakFirstTs;
+          if (
+            confirmed('closed') &&
+            (this.openSeen >= this.params.confirmations || longClosed) &&
+            (handFree || longClosed) &&
+            this.streakLastTs - restSince >= this.params.settle_ms
+          ) {
           const started_at = this.params.backdate ? restSince : Date.now();
           this.countdown = { started_at, ends_at: started_at + this.params.countdown_ms, duration_ms: this.params.countdown_ms };
           this.log(`closed detected after ${this.streakCount} verdicts over ${this.streakLastTs - this.streakFirstTs} ms (model latency ${Math.round(ev.latency_ms)} ms, backdated ${Date.now() - started_at} ms)`);
           this.setPhase('COUNTDOWN', started_at);
+          }
         }
         break;
       case 'AWAIT_OPEN':
@@ -226,6 +232,7 @@ export class PressSession {
       run: this.run,
       last_verdict: lv ? { ...lv.verdict, age_ms: now - lv.frame_ts, latency_ms: Math.round(lv.latency_ms), model: lv.model } : null,
       events: this.events.slice(-12),
+      streak: { state: this.streakState, count: this.streakCount, span_ms: this.streakLastTs - this.streakFirstTs, hand_free: this.handFreeCount, open_seen: this.openSeen },
     };
   }
 }
