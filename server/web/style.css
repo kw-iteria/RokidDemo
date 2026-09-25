@@ -34,9 +34,12 @@ button, select, input, textarea { font: inherit; color: inherit; }
 .camera img.on { display: block; }
 .empty { text-align: center; padding: 24px; max-width: 34ch; }
 .empty p { margin: 4px 0; }
-.verdict-badge { position: absolute; left: 12px; bottom: 12px; padding: 5px 10px; border-radius: 6px; background: rgba(10,13,16,0.72); backdrop-filter: blur(6px); font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
-.verdict-badge b { color: var(--ink); font-weight: 500; }
-.verdict-badge:empty { display: none; }
+.subtitle-live { position: absolute; left: 0; right: 0; bottom: 6%; text-align: center; pointer-events: none; }
+.subtitle-live b { display: inline-block; padding: 6px 18px; border-radius: 8px; background: rgba(10,13,16,0.62); backdrop-filter: blur(6px); color: var(--ink); font-size: 30px; font-weight: 500; letter-spacing: 0.01em; text-shadow: 0 1px 2px rgba(0,0,0,0.6); }
+.subtitle-live b.closed { color: var(--amber); }
+.subtitle-live b.open { color: var(--ice); }
+.subtitle-live small { display: block; margin-top: 6px; color: rgba(233,238,242,0.7); font-size: 12px; font-variant-numeric: tabular-nums; text-shadow: 0 1px 2px rgba(0,0,0,0.8); }
+.subtitle-live:empty { display: none; }
 .fov-guide { position: absolute; left: 32%; top: 30%; width: 36%; height: 40%; border: 1px dashed rgba(140,207,255,0.55); border-radius: 6px; pointer-events: none; display: none; }
 .fov-guide::after { content: "display view"; position: absolute; left: 6px; top: -18px; font-size: 11px; color: rgba(140,207,255,0.8); }
 .viewport.glasses-live .fov-guide { display: block; }

@@ -4,7 +4,7 @@
   const $ = (id) => document.getElementById(id);
   const els = {
     conn: $('conn'), srcPill: $('src-pill'), modelPill: $('model-pill'), latPill: $('lat-pill'),
-    live: $('live'), liveEmpty: $('live-empty'), badge: $('verdict-badge'), ribbon: $('ribbon'),
+    live: $('live'), liveEmpty: $('live-empty'), badge: $('verdict-badge'),
     hud: $('hud'), arc: $('dial-arc'), number: $('hud-number'), message: $('hud-message'), sub: $('hud-sub'),
     footL: $('hud-foot-left'), footR: $('hud-foot-right'), timing: $('timing'),
     source: $('source'), model: $('model'), model2: $('model2'), mode: $('mode'), inflight: $('inflight'), interval: $('interval'),
@@ -115,9 +115,10 @@
   function onVerdict(v) {
     state.verdicts.push(v);
     if (state.verdicts.length > 400) state.verdicts.shift();
-    const ver = state.lastVerifier && Date.now() - state.lastVerifier.server_now < 4000 ? ` · verifier: ${state.lastVerifier.press_visible ? state.lastVerifier.lid : 'not seen'}` : '';
-    els.badge.innerHTML = (v.press_visible ? `<b>${v.lid}</b>${v.hand_on_press ? ' · hand on it' : ''}${v.motion > 0.25 ? ' · moving' : ''} · ${v.confidence.toFixed(2)} · ${v.latency_ms} ms · ${v.model}` : `<b>press not seen</b> · ${v.latency_ms} ms · ${v.model}`) + ver;
-    drawRibbon();
+    // Subtitle over the live picture: the state word, with a small detail line.
+    const word = v.press_visible ? v.lid : 'not seen';
+    const detail = [v.hand_on_press ? 'hand on it' : '', v.motion > 0.25 ? 'moving' : '', `${v.confidence.toFixed(2)}`, `${v.latency_ms} ms`, v.model.replace(' (vetoed)', ' · vetoed')].filter(Boolean).join(' · ');
+    els.badge.innerHTML = `<b class="${word === 'not seen' ? 'none' : word}">${word}</b><small>${detail}</small>`;
   }
 
   // ------------------------------------------------------------------ HUD mirror
@@ -160,24 +161,6 @@
       ['Verdicts by model', (st.local ? `local ${st.local.count} (${st.local.p50_ms} ms, ${st.local.vetoed} vetoed) · ` : '') + (Object.entries(st.per_model || {}).map(([m, v]) => `${m} ${v.wins} (${v.p50_ms} ms${v.errors ? `, ${v.errors} err` : ''})`).join(' · ') || '—')],
     ].map(([k, v]) => `<div><span>${k}</span>${v}</div>`).join('');
   }
-
-  // ------------------------------------------------------------------ ribbon (last 60 s of verdicts)
-  function drawRibbon() {
-    const c = els.ribbon; const ctx = c.getContext('2d');
-    const w = (c.width = c.clientWidth * devicePixelRatio); const h = (c.height = 28 * devicePixelRatio);
-    ctx.clearRect(0, 0, w, h);
-    const now = serverNow(); const span = 60_000;
-    const color = { open: '#8ccfff', closed: '#f0b241', partial: '#6c7a86', unknown: '#2f3a43' };
-    for (const v of state.verdicts) {
-      const age = now - v.frame_ts; if (age > span) continue;
-      const x = w - (age / span) * w;
-      const st = v.press_visible ? v.lid : 'unknown';
-      ctx.fillStyle = color[st] || color.unknown;
-      const bh = h * (0.35 + 0.65 * (v.confidence || 0.5));
-      ctx.fillRect(x - 2 * devicePixelRatio, h - bh, 3 * devicePixelRatio, bh);
-    }
-  }
-  setInterval(drawRibbon, 500);
 
   // ------------------------------------------------------------------ sound + voice
   let audio = null;
