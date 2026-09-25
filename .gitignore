@@ -17,3 +17,5 @@ glasses/app/*.iml
 # misc
 .DS_Store
 bench-results/
+# per-machine console settings written by the server
+config.local.json
