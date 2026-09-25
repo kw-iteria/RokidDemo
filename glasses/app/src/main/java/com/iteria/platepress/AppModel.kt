@@ -25,17 +25,20 @@ class AppModel(context: Context) {
     val sounds = Sounds(app)
     private val discovery = Discovery(app)
     private val prefs = app.getSharedPreferences("platepress", Context.MODE_PRIVATE)
+    val player = VoicePlayer()
+    @Volatile private var serverVoice = true   // replies spoken by the server's neural voice (else device TTS)
     val link = ServerLink(
         onStateJson = ::onServerState,
         onConnection = { up, endpoint -> _state.update { it.copy(connected = up, host = endpoint, phase = if (up) it.phase else "CONNECTING") } },
         onEvent = ::onServerEvent,
+        onBinary = { header, body -> if (header.optString("t") == "tts" && sounds.voiceEnabled) player.enqueue(header.optString("id"), header.optInt("rate", 24_000), body, header.optBoolean("stop")) },
     )
     private val listener = Listener(
         onUtterance = { pcm, rate ->
             if (link.connected) { link.sendAudio(pcm, rate); _state.update { it.copy(thinking = true, chatStreaming = "", heardText = "") } }
         },
         onSpeech = { speaking -> _state.update { it.copy(speaking = speaking) } },
-        isSpeakerBusy = { sounds.isSpeaking() },
+        isSpeakerBusy = { sounds.isSpeaking() || player.isPlaying() },
     )
     private var lastPhase = ""
     private var alarmJob: Job? = null
@@ -94,13 +97,14 @@ class AppModel(context: Context) {
                 "assistant" -> {
                     val text = j.optString("text")
                     _state.update { it.copy(chatText = text, chatAt = System.currentTimeMillis(), chatStreaming = "", thinking = false) }
-                    sounds.say(text)
+                    if (!serverVoice) sounds.say(text)   // otherwise the neural voice is already streaming in
                 }
                 "user" -> if (j.optString("from").startsWith("glasses")) _state.update { it.copy(heardText = j.optString("text"), heardAt = System.currentTimeMillis(), thinking = true) }
             }
             "chat.delta" -> _state.update { it.copy(chatStreaming = it.chatStreaming + j.optString("delta"), thinking = true) }
             "chat.thinking" -> _state.update { it.copy(thinking = j.optBoolean("on") || it.chatStreaming.isNotEmpty()) }
             "camera" -> applyCamera(j)
+            "voice" -> serverVoice = j.optString("mode") == "server"
         }
     }
 
@@ -142,12 +146,13 @@ class AppModel(context: Context) {
     fun toggleVoice(): Boolean {
         sounds.voiceEnabled = !sounds.voiceEnabled
         _state.update { it.copy(voice = sounds.voiceEnabled) }
-        if (sounds.voiceEnabled) sounds.say("Voice on") else sounds.tick()
+        if (!sounds.voiceEnabled) { player.flush(); sounds.tick() } else sounds.chime()
         return sounds.voiceEnabled
     }
 
     fun close() {
         listener.shutdown()
+        player.release()
         stopAlarm()
         scope.cancel()
         link.close()

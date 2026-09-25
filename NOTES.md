@@ -124,6 +124,14 @@ with the live frame plus one open and one closed reference photo to the vision m
 else goes to the text model, which also handles tool calls. If the text vendor fails, the vision
 model answers. Replies are stripped of markdown because they are spoken on the glasses.
 
+## Spoken replies (2026-09-25)
+* Server-side `gpt-4o-mini-tts` (voice "coral", PCM 24 kHz) streamed per sentence while the reply is
+  still being generated; the glasses play it through an AudioTrack and the console through Web Audio.
+  Measured: first audio chunk ≈ 0.85 s after the question; a 3-sentence answer streams 14 s of audio
+  with no gaps. The microphone on the glasses ignores audio while the speaker is busy (+350 ms).
+* A new message cancels the current speech (`stop` envelope) and reply.
+* Falls back to the device's own text-to-speech when the neural voice is switched off in the console.
+
 ## Timing observed on the replay (assets/press_demo_640.mp4)
 * press seen → "Please close" in ~1.0 s after the first frame
 * lid closed → COUNTDOWN 0.9 s later, countdown backdated by that 0.9 s (ring starts at ~9.1)

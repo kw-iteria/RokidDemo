@@ -16,6 +16,7 @@ class ServerLink(
     private val onStateJson: (JSONObject) -> Unit,
     private val onConnection: (up: Boolean, endpoint: String) -> Unit,
     private val onEvent: (JSONObject) -> Unit = {},
+    private val onBinary: (header: JSONObject, body: ByteArray) -> Unit = { _, _ -> },
 ) {
     private val client = OkHttpClient.Builder()
         .pingInterval(5, TimeUnit.SECONDS)
@@ -56,11 +57,22 @@ class ServerLink(
                             val rtt = System.currentTimeMillis() - j.getLong("ts")
                             clockOffset = j.getLong("server_now") + rtt / 2 - System.currentTimeMillis()
                         }
-                        "chat", "chat.delta", "chat.thinking", "camera" -> onEvent(j)
+                        "chat", "chat.delta", "chat.thinking", "camera", "voice" -> onEvent(j)
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "bad message: ${e.message}")
                 }
+            }
+
+            override fun onMessage(webSocket: WebSocket, bytes: okio.ByteString) {
+                try {
+                    val b = bytes.toByteArray()
+                    if (b.size < 4) return
+                    val n = ((b[0].toInt() and 0xff) shl 8) or (b[1].toInt() and 0xff)
+                    if (2 + n > b.size) return
+                    val header = JSONObject(String(b, 2, n, Charsets.UTF_8))
+                    onBinary(header, b.copyOfRange(2 + n, b.size))
+                } catch (e: Exception) { Log.w(TAG, "bad binary message: ${e.message}") }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {

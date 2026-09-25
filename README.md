@@ -13,8 +13,10 @@ desktop console walk you through the motion:
 
 **Talking to the assistant.** The console has a chat panel with a microphone button; on the glasses
 (the app is called **Iteria**) the microphone is always on: just speak, like a regular chat. A
-shimmering bubble appears the moment your words are captured, the reply streams in, and it is read
-aloud. Tap the temple button to mute or unmute the microphone.
+shimmering bubble appears the moment your words are captured, the reply streams in, and it is
+spoken by a natural neural voice (OpenAI text-to-speech, streamed sentence by sentence from the
+server to the glasses and the console, so speech starts about a second after you finish talking).
+Pick the voice and speed in the console. Tap the temple button to mute or unmute the microphone.
 It is a general chatbot that also runs the workflow: start/stop it, change the press time, pick
 models, save the current view as a reference photo, or just ask anything. Double-tap the temple
 button to start or restart without talking. "Start / stop the workflow" in any wording (even

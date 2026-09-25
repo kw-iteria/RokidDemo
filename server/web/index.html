@@ -110,9 +110,20 @@
     <button id="btn-replay">Replay demo clip</button>
     <button id="btn-webcam">Use this computer's camera</button>
     <button id="btn-sound" aria-pressed="true">Sound on</button>
-    <button id="btn-voice" aria-pressed="false">Voice off</button>
+    <button id="btn-voice" aria-pressed="true">Voice on</button>
     <button id="btn-prompt">Edit prompt</button>
     <span id="hosts" class="hosts"></span>
+  </div>
+  <div class="row">
+    <label>Assistant voice
+      <select id="voice-name"><option value="coral">Coral</option><option value="marin">Marin</option><option value="cedar">Cedar</option><option value="nova">Nova</option><option value="sage">Sage</option><option value="shimmer">Shimmer</option><option value="alloy">Alloy</option><option value="ash">Ash</option><option value="ballad">Ballad</option><option value="echo">Echo</option><option value="fable">Fable</option><option value="onyx">Onyx</option><option value="verse">Verse</option></select>
+    </label>
+    <label>Speaking speed
+      <input id="voice-speed" type="number" min="0.5" max="2" step="0.05" value="1.05">
+    </label>
+    <label>Spoken replies on the glasses
+      <select id="voice-enabled"><option value="true">neural voice (server)</option><option value="false">device voice / none</option></select>
+    </label>
   </div>
   <div class="row">
     <label>Chat model (text)

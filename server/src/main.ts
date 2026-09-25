@@ -14,6 +14,7 @@ import { startBeacon, lanAddresses } from './beacon.ts';
 import { CANDIDATE_MODELS, DEFAULT_PROMPT } from './vision.ts';
 import { Agent, transcribePcm16, type ChatMessage } from './agent.ts';
 import { motionScore } from './motion.ts';
+import { DEFAULT_VOICE, Speaker, type VoiceConfig } from './tts.ts';
 
 loadEnv();
 const ROOT = resolve(import.meta.dirname, '..', '..');
@@ -29,6 +30,7 @@ interface AppConfig {
   camera: CameraConfig;
   chatFast: string;    // text-only conversation + tool calls
   chatVision: string;  // questions about the camera view
+  voice: VoiceConfig;  // neural voice for replies (server-side TTS streamed to glasses + console)
   maxInflight: number;
   minIntervalMs: number;
   timeoutMs: number;
@@ -42,6 +44,7 @@ const config: AppConfig = {
   camera: { rotation: 0, mirror: false, longEdge: 480, fps: 6, aspect: 'native' },
   chatFast: process.env.CHAT_FAST_MODEL ?? 'groq/qwen/qwen3.8-27b',
   chatVision: process.env.CHAT_VISION_MODEL ?? 'gpt-4.1-mini',
+  voice: { ...DEFAULT_VOICE },
   maxInflight: 4,
   minIntervalMs: 150,
   timeoutMs: 8000,
@@ -53,8 +56,8 @@ if (existsSync(CONFIG_FILE)) {
   try { Object.assign(config, JSON.parse(readFileSync(CONFIG_FILE, 'utf8'))); } catch (e) { console.warn('config.local.json ignored:', (e as Error).message); }
 }
 function persist(): void {
-  const { models, mode, maxInflight, minIntervalMs, timeoutMs, prompt, params, camera, chatFast, chatVision } = config;
-  writeFileSync(CONFIG_FILE, JSON.stringify({ models, mode, maxInflight, minIntervalMs, timeoutMs, prompt, params, camera, chatFast, chatVision }, null, 2));
+  const { models, mode, maxInflight, minIntervalMs, timeoutMs, prompt, params, camera, chatFast, chatVision, voice } = config;
+  writeFileSync(CONFIG_FILE, JSON.stringify({ models, mode, maxInflight, minIntervalMs, timeoutMs, prompt, params, camera, chatFast, chatVision, voice }, null, 2));
 }
 
 // ----------------------------------------------------------------------------- core
@@ -142,17 +145,18 @@ function stateMessage(): string {
     server_now: now,
     session: session.snapshot(now),
     stats: detector.stats(),
-    config: { models: config.models, mode: config.mode, maxInflight: config.maxInflight, minIntervalMs: config.minIntervalMs, timeoutMs: config.timeoutMs, source: config.source, params: config.params, camera: config.camera, chatFast: config.chatFast, chatVision: config.chatVision },
+    config: { models: config.models, mode: config.mode, maxInflight: config.maxInflight, minIntervalMs: config.minIntervalMs, timeoutMs: config.timeoutMs, source: config.source, params: config.params, camera: config.camera, chatFast: config.chatFast, chatVision: config.chatVision, voice: config.voice },
     sources: [...sources.values()].map((s) => ({ id: s.id, kind: s.kind, fps: sourceFps(s), alive: now - s.lastFrameAt < 2500, active: activeSourceId() === s.id, info: s.info ?? null })),
     camera: { live: Boolean(activeSourceId()), source: activeSourceId() },
     hosts: lanAddresses(),
     port: PORT,
   });
 }
-function broadcast(msg: string): void {
-  for (const ws of desktops) if (ws.readyState === WebSocket.OPEN) ws.send(msg);
-  for (const ws of glassesClients) if (ws.readyState === WebSocket.OPEN) ws.send(msg);
+function broadcast(msg: string | Buffer): void {
+  for (const ws of desktops) if (ws.readyState === WebSocket.OPEN && (typeof msg === 'string' || ws.bufferedAmount < 2_000_000)) ws.send(msg);
+  for (const ws of glassesClients) if (ws.readyState === WebSocket.OPEN && (typeof msg === 'string' || ws.bufferedAmount < 2_000_000)) ws.send(msg);
 }
+function voiceMessage(): string { return JSON.stringify({ t: 'voice', mode: config.voice.enabled ? 'server' : 'device', voice: config.voice.voice }); }
 function broadcastState(): void { broadcast(stateMessage()); }
 
 // ----------------------------------------------------------------------------- replay
@@ -197,6 +201,7 @@ const agent = new Agent({ fast: config.chatFast, vision: config.chatVision }, ()
   set_reference: (kind) => { if (!latestFrame) return 'no live frame to capture'; applyCommand({ cmd: 'set_reference', kind }, 'chat'); return `saved the current frame as the "${kind}" reference`; },
 });
 let chatInflight: AbortController | null = null;
+let currentSpeaker: Speaker | null = null;
 async function handleChat(text: string, from: string): Promise<void> {
   const clean = text.trim();
   if (!clean) return;
@@ -205,16 +210,21 @@ async function handleChat(text: string, from: string): Promise<void> {
   if (chatInflight) { log('warn', 'chat: cancelling the previous reply, a new message arrived'); chatInflight.abort(); }
   const ac = new AbortController();
   chatInflight = ac;
+  if (currentSpeaker) { currentSpeaker.cancel(); currentSpeaker = null; }
   broadcast(JSON.stringify({ t: 'chat.thinking', on: true }));
   const t0 = Date.now();
+  const speaker = config.voice.enabled ? new Speaker(`s${Date.now()}`, config.voice, (buf) => broadcast(buf), (e) => log('warn', `tts: ${e}`)) : null;
+  currentSpeaker = speaker;
+  ac.signal.addEventListener('abort', () => speaker?.cancel(), { once: true });
   try {
     const reply = await agent.chat(
       clean, from,
-      (id, delta) => broadcast(JSON.stringify({ t: 'chat.delta', id, delta })),
+      (id, delta) => { broadcast(JSON.stringify({ t: 'chat.delta', id, delta })); speaker?.push(delta); },
       (e) => { if (e.type === 'tool') log('info', `agent tool ${e.name}: ${e.result}`); else log('info', `chat model ${e.model}${e.vision ? ' (with camera frame)' : ''}`); },
       ac.signal,
     );
     if (ac.signal.aborted) return;
+    speaker?.end(reply.text);
     broadcast(JSON.stringify({ t: 'chat', ...reply }));
     log('info', `chat (${from}, ${reply.model}, ${Date.now() - t0} ms): "${clean.slice(0, 80)}" → "${reply.text.slice(0, 100)}"`);
   } catch (e) {
@@ -252,6 +262,14 @@ function applyCommand(msg: Record<string, unknown>, from: string): void {
       if (c.mode === 'race' || c.mode === 'primary') config.mode = c.mode;
       if (typeof c.chatFast === 'string' && c.chatFast.trim()) { config.chatFast = c.chatFast.trim(); agent.models.fast = config.chatFast; }
       if (typeof c.chatVision === 'string' && c.chatVision.trim()) { config.chatVision = c.chatVision.trim(); agent.models.vision = config.chatVision; }
+      if (c.voice && typeof c.voice === 'object') {
+        const v = c.voice as Partial<VoiceConfig>;
+        if (typeof v.enabled === 'boolean') config.voice.enabled = v.enabled;
+        if (typeof v.voice === 'string' && v.voice.trim()) config.voice.voice = v.voice.trim();
+        if (typeof v.speed === 'number') config.voice.speed = Math.max(0.5, Math.min(2, v.speed));
+        if (typeof v.instructions === 'string') config.voice.instructions = v.instructions;
+        for (const ws of glassesClients) if (ws.readyState === WebSocket.OPEN) ws.send(voiceMessage());
+      }
       if (typeof c.maxInflight === 'number') config.maxInflight = Math.max(1, Math.min(6, c.maxInflight));
       if (typeof c.minIntervalMs === 'number') config.minIntervalMs = Math.max(50, c.minIntervalMs);
       if (typeof c.timeoutMs === 'number') config.timeoutMs = Math.max(1000, c.timeoutMs);
@@ -387,7 +405,7 @@ wss.on('connection', (ws, req) => {
       }
       try {
         const msg = JSON.parse(data.toString());
-        if (msg.t === 'hello') { src.info = msg.device ?? msg; log('info', `${id} hello ${JSON.stringify(src.info).slice(0, 160)}`); ws.send(cameraMessage()); }
+        if (msg.t === 'hello') { src.info = msg.device ?? msg; log('info', `${id} hello ${JSON.stringify(src.info).slice(0, 160)}`); ws.send(cameraMessage()); ws.send(voiceMessage()); }
         else if (msg.t === 'gesture') { session.gesture(String(msg.name)); log('info', `gesture ${msg.name} from ${id}`); }
         else if (msg.t === 'chat') void handleChat(String(msg.text ?? ''), id);
         else if (msg.t === 'status') {

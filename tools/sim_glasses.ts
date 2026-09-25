@@ -6,6 +6,8 @@ import { existsSync, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import WebSocket from 'ws';
 import { encodeFrame } from '../server/src/frames.ts';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
 
 const base = process.argv[2] ?? 'ws://localhost:8787';
 const seconds = Number(process.argv[3] ?? 30);
@@ -49,8 +51,25 @@ ws.on('open', () => {
   }, 1000 / 6);
   setInterval(() => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify({ t: 'ping', ts: Date.now() })), 2000);
 });
+const ttsStats = new Map<string, { chunks: number; bytes: number; first: number; last: number; text: string[] }>();
+const ttsPcm: Buffer[] = [];
 ws.on('message', (data, isBinary) => {
-  if (isBinary) return;
+  if (isBinary) {
+    const buf = data as Buffer;
+    const n = buf.readUInt16BE(0);
+    try {
+      const h = JSON.parse(buf.subarray(2, 2 + n).toString());
+      if (h.t === 'tts') {
+        const st = ttsStats.get(h.id) ?? { chunks: 0, bytes: 0, first: Date.now(), last: 0, text: [] };
+        const body = buf.subarray(2 + n);
+        st.chunks++; st.bytes += body.length; st.last = Date.now(); if (h.text && !st.text.includes(h.text)) st.text.push(h.text);
+        ttsStats.set(h.id, st);
+        if (body.length) ttsPcm.push(Buffer.from(body));
+        if (h.last) console.log(`${((Date.now() - t0) / 1000).toFixed(2).padStart(6)}s  VOICE ${h.id}: ${st.chunks} chunks, ${(st.bytes / 48000).toFixed(1)} s of audio, first chunk +${st.first - t0 - 0} ms wall, sentences: ${st.text.map((x) => JSON.stringify(x.slice(0, 40))).join(' | ')}`);
+      }
+    } catch { /* not tts */ }
+    return;
+  }
   const m = JSON.parse(data.toString());
   if (m.t === 'pong') { offset = m.server_now + (Date.now() - m.ts) / 2 - Date.now(); return; }
   if (m.t === 'chat') { console.log(`${((Date.now() - t0) / 1000).toFixed(2).padStart(6)}s  CHAT ${m.role}${m.model ? ' (' + m.model + ', ' + m.ms + ' ms)' : ''}: ${String(m.text).slice(0, 120)}`); return; }
@@ -63,5 +82,13 @@ ws.on('message', (data, isBinary) => {
     console.log(`${((Date.now() - t0) / 1000).toFixed(2).padStart(6)}s  HUD: ${s.phase.padEnd(12)} "${s.message}" ${s.sub ? '/ ' + s.sub : ''}${cd}  alarm=${s.alarm}  sources=${m.sources.map((x: { id: string; active: boolean; fps: number }) => `${x.id}${x.active ? '*' : ''}@${x.fps}`).join(',')}`);
   }
 });
-ws.on('close', () => { console.log('closed; frames sent', seq); process.exit(0); });
+ws.on('close', () => {
+  console.log('closed; frames sent', seq);
+  if (ttsPcm.length) {
+    const pcm = Buffer.concat(ttsPcm); const fs = require('node:fs');
+    const header = Buffer.alloc(44); header.write('RIFF', 0); header.writeUInt32LE(36 + pcm.length, 4); header.write('WAVE', 8); header.write('fmt ', 12); header.writeUInt32LE(16, 16); header.writeUInt16LE(1, 20); header.writeUInt16LE(1, 22); header.writeUInt32LE(24000, 24); header.writeUInt32LE(48000, 28); header.writeUInt16LE(2, 32); header.writeUInt16LE(16, 34); header.write('data', 36); header.writeUInt32LE(pcm.length, 40);
+    fs.mkdirSync('bench-results', { recursive: true }); fs.writeFileSync('bench-results/last_voice.wav', Buffer.concat([header, pcm])); console.log('saved bench-results/last_voice.wav', (pcm.length / 48000).toFixed(1), 's');
+  }
+  process.exit(0);
+});
 ws.on('error', (e) => { console.error('ws error', e.message); process.exit(1); });

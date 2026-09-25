@@ -11,10 +11,10 @@
     confirm: $('confirm'), dwell: $('dwell'), settle: $('settle'), handfree: $('handfree'), hosts: $('hosts'), log: $('log'),
     prompt: $('prompt'), promptBox: $('prompt-box'),
     camRot: $('cam-rot'), camMirror: $('cam-mirror'), camAspect: $('cam-aspect'), camEdge: $('cam-edge'), camFps: $('cam-fps'),
-    chatFast: $('chat-fast'), chatVision: $('chat-vision'),
+    chatFast: $('chat-fast'), chatVision: $('chat-vision'), voiceName: $('voice-name'), voiceSpeed: $('voice-speed'), voiceEnabled: $('voice-enabled'),
     chatLog: $('chat-log'), chatForm: $('chat-form'), chatInput: $('chat-input'), mic: $('btn-mic'), hudChat: $('hud-chat'),
   };
-  const state = { snap: null, offset: 0, verdicts: [], lastFrameUrl: null, sound: true, voice: false, lastPhase: null, lastBeep: 0, defaultPrompt: '', bench: null, editing: false };
+  const state = { snap: null, offset: 0, verdicts: [], lastFrameUrl: null, sound: true, voice: true, lastPhase: null, lastBeep: 0, defaultPrompt: '', bench: null, editing: false };
 
   // ------------------------------------------------------------------ websocket
   let ws = null;
@@ -39,9 +39,28 @@
   const cmd = (o) => send({ t: 'cmd', ...o });
 
   // ------------------------------------------------------------------ frames
+  // ---- streamed neural voice (PCM16 mono from the server) ----
+  const voice = { ctx: null, nextTime: 0, currentId: null };
+  function playPcm(header, pcmBytes) {
+    if (!state.voice) return;
+    if (header.stop) { voice.currentId = null; voice.nextTime = 0; if (voice.ctx) { voice.ctx.close(); voice.ctx = null; } return; }
+    if (!pcmBytes.byteLength) return;
+    if (voice.currentId !== header.id) { voice.currentId = header.id; voice.nextTime = 0; }
+    voice.ctx = voice.ctx || new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+    const int16 = new Int16Array(pcmBytes.buffer.slice(pcmBytes.byteOffset, pcmBytes.byteOffset + pcmBytes.byteLength - (pcmBytes.byteLength % 2)));
+    const buffer = voice.ctx.createBuffer(1, int16.length, header.rate || 24000);
+    const ch = buffer.getChannelData(0);
+    for (let i = 0; i < int16.length; i++) ch[i] = int16[i] / 32768;
+    const src = voice.ctx.createBufferSource(); src.buffer = buffer; src.connect(voice.ctx.destination);
+    const at = Math.max(voice.ctx.currentTime + 0.02, voice.nextTime);
+    src.start(at); voice.nextTime = at + buffer.duration;
+  }
   function onFrame(buf) {
     const view = new DataView(buf);
     const n = view.getUint16(0);
+    if (n < 400) {
+      try { const h = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 2, n))); if (h.t === 'tts') return playPcm(h, new Uint8Array(buf, 2 + n)); } catch (e) { /* camera frame */ }
+    }
     const jpeg = new Blob([buf.slice(2 + n)], { type: 'image/jpeg' });
     const url = URL.createObjectURL(jpeg);
     els.live.onload = () => { if (state.lastFrameUrl) URL.revokeObjectURL(state.lastFrameUrl); state.lastFrameUrl = url; };
@@ -81,6 +100,7 @@
     els.model2.value = msg.config.models[1] || '';
     els.mode.value = msg.config.mode || 'primary';
     if (msg.config.chatFast) { els.chatFast.value = msg.config.chatFast; els.chatVision.value = msg.config.chatVision; }
+    if (msg.config.voice) { els.voiceName.value = msg.config.voice.voice; els.voiceSpeed.value = msg.config.voice.speed; els.voiceEnabled.value = String(msg.config.voice.enabled); }
     if (msg.config.camera) { els.camRot.value = String(msg.config.camera.rotation); els.camMirror.value = String(msg.config.camera.mirror); els.camAspect.value = msg.config.camera.aspect || 'native'; els.camEdge.value = msg.config.camera.longEdge; els.camFps.value = msg.config.camera.fps; }
     els.inflight.value = msg.config.maxInflight;
     els.interval.value = msg.config.minIntervalMs;
@@ -168,7 +188,10 @@
     const t = audio.currentTime; o.start(t); g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(0.0001, t + ms / 1000); o.stop(t + ms / 1000);
   }
   function say(text) {
+    // Spoken replies come from the server's neural voice (playPcm); the browser voice is only used for
+    // workflow prompts when the neural voice is turned off in the settings.
     if (!state.voice || !('speechSynthesis' in window)) return;
+    if (state.snap && state.snap.config.voice && state.snap.config.voice.enabled) return;
     speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(text); u.rate = 1.05; speechSynthesis.speak(u);
   }
   function onPhaseChange(from, to, s) {
@@ -225,7 +248,12 @@
   let replaying = false;
   $('btn-replay').onclick = (e) => { replaying = !replaying; cmd({ cmd: 'replay', action: replaying ? 'start' : 'stop', loop: false, fps: 6 }); e.target.textContent = replaying ? 'Stop replay' : 'Replay demo clip'; };
   $('btn-sound').onclick = (e) => { state.sound = !state.sound; e.target.setAttribute('aria-pressed', String(state.sound)); e.target.textContent = state.sound ? 'Sound on' : 'Sound off'; if (state.sound) beep(660, 80); };
-  $('btn-voice').onclick = (e) => { state.voice = !state.voice; e.target.setAttribute('aria-pressed', String(state.voice)); e.target.textContent = state.voice ? 'Voice on' : 'Voice off'; if (state.voice) say('Voice on'); };
+  $('btn-voice').onclick = (e) => { state.voice = !state.voice; e.target.setAttribute('aria-pressed', String(state.voice)); e.target.textContent = state.voice ? 'Voice on' : 'Voice off'; if (!state.voice) playPcm({ stop: true }, new Uint8Array(0)); };
+  for (const el of [els.voiceName, els.voiceSpeed, els.voiceEnabled]) {
+    el.addEventListener('focus', () => (state.editing = true));
+    el.addEventListener('blur', () => (state.editing = false));
+    el.addEventListener('change', () => cmd({ cmd: 'set', config: { voice: { enabled: els.voiceEnabled.value === 'true', voice: els.voiceName.value, speed: Number(els.voiceSpeed.value) } } }));
+  }
   $('btn-prompt').onclick = () => { els.promptBox.hidden = !els.promptBox.hidden; };
   $('btn-prompt-save').onclick = () => cmd({ cmd: 'set', config: { prompt: els.prompt.value } });
   $('btn-prompt-reset').onclick = () => { els.prompt.value = state.defaultPrompt; cmd({ cmd: 'set', config: { prompt: state.defaultPrompt } }); };
@@ -269,7 +297,7 @@
     if (!li.parentNode) els.chatLog.appendChild(li);
     if (m.role === 'user' && fresh) showThinking('');
     els.chatLog.scrollTop = els.chatLog.scrollHeight;
-    if (m.role === 'assistant' && fresh) { state.hudChat = { text: m.text, at: Date.now() }; say(m.text); }
+    if (m.role === 'assistant' && fresh) { state.hudChat = { text: m.text, at: Date.now() }; }
   }
   els.chatForm.addEventListener('submit', (e) => {
     e.preventDefault();
