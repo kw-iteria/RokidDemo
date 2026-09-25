@@ -39,9 +39,20 @@ class AppModel(context: Context) {
 
     fun clockOffset(): Long = link.clockOffset
 
+    /** Filled in by the activity so the heartbeat can report camera health to the server. */
+    var cameraStatus: () -> JSONObject = { JSONObject().put("status", "no camera object") }
+
     fun start() {
         scope.launch { connectionLoop() }
-        scope.launch { while (isActive) { delay(2000); if (link.connected) link.ping() } }
+        scope.launch {
+            while (isActive) {
+                delay(2000)
+                if (link.connected) {
+                    link.ping()
+                    link.sendJson(JSONObject().put("t", "status").put("camera", cameraStatus()).put("voice", sounds.voiceEnabled))
+                }
+            }
+        }
     }
 
     private suspend fun connectionLoop() {

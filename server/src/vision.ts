@@ -131,6 +131,9 @@ function withTimeout(signal: AbortSignal | undefined, timeoutMs: number): AbortS
 function parseVerdict(text: string): Verdict {
   // Tolerate code fences or stray prose around the JSON.
   const m = text.match(/\{[\s\S]*\}/);
+  if (!m && /(can'?t|cannot|don'?t|do not|unable to) (see|find|locate|identify)|not (visible|in view|present|shown)|no (plate )?press/i.test(text)) {
+    return { press_visible: false, lid: 'unknown', confidence: 0.6 }; // the model answered in prose: "I can't see the press"
+  }
   const obj = JSON.parse(m ? m[0] : text);
   const lid = String(obj.lid ?? 'unknown').toLowerCase();
   return {
@@ -252,7 +255,7 @@ async function classifyRealtime(model: string, jpeg: Buffer, opts: ClassifyOptio
   if (!session) { session = new RealtimeSession(model, key); realtimeSessions.set(model, session); }
   const t0 = performance.now();
   try {
-    const a = await session.ask(jpeg, opts.prompt ?? DEFAULT_PROMPT, 'Now the LIVE frame. Report the state of the press as the JSON object.', { timeoutMs: opts.timeoutMs ?? 8000, signal: opts.signal, refs: opts.refs });
+    const a = await session.ask(jpeg, opts.prompt ?? DEFAULT_PROMPT, 'This is the LIVE frame. Reply with ONLY the JSON object {"press_visible":..., "lid":..., "confidence":...}; if the press is not in view answer {"press_visible":false,"lid":"unknown","confidence":...}. No prose.', { timeoutMs: opts.timeoutMs ?? 8000, signal: opts.signal, refs: opts.refs });
     try {
       return { model, provider: 'openai-realtime', verdict: parseVerdict(a.text), latency_ms: a.latency_ms, raw: a.text, usage: a.usage };
     } catch (e) {

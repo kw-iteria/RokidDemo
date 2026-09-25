@@ -4,11 +4,18 @@ Look at the press through Rokid RV101 glasses. The glasses stream what you see t
 server on your Mac, a vision model reads the state of the press, and both the glasses HUD and a
 desktop console walk you through the motion:
 
-1. **Looking for the plate press** — the camera finds the press.
-2. **Please close the plate press** — the moment the lid is seen closed, a 10 s countdown ring starts
-   (backdated to the frame where the lid closed, so model latency does not eat into the 10 s).
-3. **Open the plate press** — after 10 s, a pulsing alert and beeps until the lid is seen open.
-4. **Plate press motion completed** — check mark, done. Tap the temple button to run again.
+0. **Standby** — say (or type) "start plate press workflow" to the assistant. Nothing is detected until then.
+1. **Looking for the plate press** — the camera finds the silver glass box.
+2. **Please close the plate press** — once the lid is seen closed (after having been seen open), a 10 s
+   countdown ring runs in the top-right corner, backdated to the frame where the lid closed.
+3. **Open the plate press** — after 10 s, a pulsing frame and beeps until the lid is seen open.
+4. **Plate press motion completed** — check mark, done. It returns to standby after 12 s.
+
+**Talking to the assistant.** The console has a chat panel with a microphone button; on the glasses,
+tap the temple button, speak, and the reply is shown and read aloud. The assistant sees the live
+frame and the workflow state, and can start/stop the workflow, change the press time, pick models,
+or save the current view as a reference photo. Double-tap the temple button to start or restart
+without talking.
 
 ```
 Rokid glasses (Kotlin/Compose)  ──JPEG frames over WebSocket──▶  server (Node, no build step)  ──▶  Gemini / OpenAI vision
@@ -38,10 +45,22 @@ No glasses at hand? In the console press **Replay demo clip** (the phone video i
 | `server/src/main.ts` | HTTP + WebSocket hub, source arbitration (glasses / webcam / replay), UDP beacon |
 | `server/src/session.ts` | the workflow state machine (SEARCHING → AWAIT_CLOSE → COUNTDOWN → AWAIT_OPEN → COMPLETE) |
 | `server/src/detector.ts` | frame scheduler: several requests in flight, optional model race, stale-verdict dropping |
-| `server/src/vision.ts` | one-frame structured classification over raw REST (Gemini `generateContent`, OpenAI Responses) |
+| `server/src/vision.ts` | one-frame structured classification (Gemini `generateContent`, OpenAI Responses, OpenAI Realtime, OpenAI-compatible vendors) |
+| `server/src/agent.ts` | the chat assistant: sees the frame + state, calls workflow tools; speech-to-text for push-to-talk |
+| `server/refs/` | reference photos of the press, open and closed; every model request carries them |
 | `server/web/` | desktop console (vanilla HTML/CSS/JS) with a live mirror of the glasses HUD |
 | `glasses/` | Android app for the Rokid glasses (CameraX → JPEG → WebSocket; Compose HUD; beeps + TTS; temple gestures) |
 | `tools/bench.ts` | latency + accuracy benchmark of candidate models on frames of the demo clip |
+
+## Detection
+
+The vision model is told that the press is one specific object and is shown reference photos of it
+(open and closed, from the phone clip and from the glasses clips) with every frame, so hands, laptops,
+papers and other boxes are not mistaken for it. State changes need two strictly consecutive agreeing
+verdicts, a close is only accepted after the box was seen open in that run (or after a long unbroken
+closed streak if it was closed from the start), and the workflow only runs after you start it.
+Capture new reference photos of the real press from the console ("Capture open/closed from live view")
+or by telling the assistant "use this as the closed reference".
 
 ## Latency design
 

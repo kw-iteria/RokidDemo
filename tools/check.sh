@@ -37,7 +37,11 @@ d = json.load(open(sys.argv[1]))
 g = [s for s in d["sources"] if s["kind"] == "glasses"]
 if g:
     for s in g:
-        print("  \033[32m\u2714\033[0m glasses connected to the server: %s at %s fps%s" % (s["id"], s["fps"], "" if s["alive"] else " (no frames yet)"))
+        cam = (s.get("info") or {}).get("camera") or {}
+        detail = ""
+        if cam:
+            detail = ": camera " + str(cam.get("status")) + (", permission missing" if cam.get("permission") is False else "") + ((", " + str(cam.get("error"))) if cam.get("error") else "")
+        print("  \033[32m\u2714\033[0m glasses connected to the server: %s at %s fps%s" % (s["id"], s["fps"], "" if s["alive"] else " (no frames yet" + detail + ")"))
 else:
     print("  \033[31m\u2718\033[0m no glasses connected to the server yet (app not running, or beacon blocked - see README fallback)")
 print("    phase: %s   models: %s" % (d["session"]["phase"], " + ".join(d["config"]["models"])))

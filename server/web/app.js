@@ -53,8 +53,10 @@
     state.snap = msg;
     const s = msg.session;
     const active = msg.sources.find((x) => x.active);
-    els.srcPill.textContent = active ? `${active.kind} ${active.fps} fps` : 'no camera';
-    els.srcPill.className = active ? 'pill ok' : 'pill';
+    const idleGlasses = msg.sources.find((x) => x.kind === 'glasses' && !x.alive && x.info && x.info.camera);
+    els.srcPill.textContent = active ? `${active.kind} ${active.fps} fps` : idleGlasses ? `glasses connected, camera: ${idleGlasses.info.camera.status}${idleGlasses.info.camera.permission === false ? ' (permission missing)' : ''}` : 'no camera';
+    els.srcPill.className = active ? 'pill ok' : idleGlasses ? 'pill warn' : 'pill';
+    els.srcPill.title = idleGlasses && idleGlasses.info.camera.error ? idleGlasses.info.camera.error : '';
     els.modelPill.textContent = msg.config.models.join(' + ');
     els.latPill.textContent = msg.stats.p50_ms ? `${msg.stats.p50_ms} ms · ${msg.stats.decisions_per_s}/s` : '— ms';
     els.hosts.textContent = msg.hosts.length ? `glasses find this Mac at ${msg.hosts.map((h) => `${h}:${msg.port}`).join(' or ')}` : '';
@@ -96,8 +98,9 @@
     els.message.textContent = s.message;
     els.sub.textContent = s.hint || s.sub;
     const lv = s.last_verdict;
-    els.footL.textContent = lv ? (lv.press_visible ? `press ${lv.lid}` : 'press not seen') : '';
-    els.footR.textContent = lv ? `${(lv.latency_ms / 1000).toFixed(1)} s` : '';
+    const showVerdict = lv && s.phase !== 'IDLE';
+    els.footL.textContent = showVerdict ? (lv.press_visible ? `press ${lv.lid}` : 'press not seen') : '';
+    els.footR.textContent = showVerdict ? `${(lv.latency_ms / 1000).toFixed(1)} s` : '';
     if (s.phase === 'COUNTDOWN' && s.countdown) {
       const remaining = Math.max(0, s.countdown.ends_at - serverNow());
       const frac = remaining / s.countdown.duration_ms;

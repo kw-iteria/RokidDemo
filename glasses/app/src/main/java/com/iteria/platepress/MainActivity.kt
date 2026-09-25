@@ -17,6 +17,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.core.content.ContextCompat
 import com.iteria.platepress.ui.Hud
+import org.json.JSONObject
 
 class MainActivity : ComponentActivity() {
     private lateinit var model: AppModel
@@ -43,6 +44,12 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         model = AppModel(this)
+        model.cameraStatus = {
+            val c = camera
+            val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+            JSONObject().put("permission", granted).put("status", c?.status ?: if (granted) "not started" else "permission not granted")
+                .put("frames", c?.framesSent ?: 0).put("fps", c?.fps ?: 0f).put("error", c?.lastError ?: "")
+        }
         model.start()
         setContent {
             val state by model.state.collectAsState()

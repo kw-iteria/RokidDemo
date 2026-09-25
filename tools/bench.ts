@@ -35,11 +35,16 @@ if (!existsSync(frameDir)) {
 }
 const frames = frameIds.map((id) => ({ id, truth: TRUTH[id], jpeg: readFileSync(resolve(frameDir, `f_${String(id).padStart(3, '0')}.jpg`)) }));
 const refs = useRefs
-  ? [
-      { label: 'the plate press OPEN (lid raised, inside visible)', jpeg: readFileSync(resolve('server/refs/open.jpg')) },
-      { label: 'the plate press CLOSED (lid down, flat block)', jpeg: readFileSync(resolve('server/refs/closed.jpg')) },
-    ]
+  ? readdirSync(resolve('server/refs')).filter((f) => /^(open|closed)\d*\.jpg$/.test(f)).sort().map((f) => ({
+      label: f.startsWith('open') ? 'the plate press OPEN (lid raised, inside visible)' : 'the plate press CLOSED (lid down, one flat block)',
+      jpeg: readFileSync(resolve('server/refs', f)),
+    }))
   : undefined;
+// Extra labelled frame folders: --extra open=dir1,closed=dir2 (every jpg in dir gets that truth).
+for (const spec of (args.get('extra') ?? '').split(',').filter(Boolean)) {
+  const [truth, dir] = spec.split('=');
+  for (const f of readdirSync(resolve(dir)).filter((x) => x.endsWith('.jpg')).sort()) frames.push({ id: 200 + frames.length, truth: truth as LidState, jpeg: readFileSync(resolve(dir, f)) });
+}
 // Negative images (no press at all): expect press_visible=false.
 const negDir = args.get('negatives');
 if (negDir) for (const f of readdirSync(resolve(negDir)).filter((x) => x.endsWith('.jpg')).sort()) frames.push({ id: 100 + frames.length, truth: 'none' as LidState, jpeg: readFileSync(resolve(negDir, f)) });

@@ -49,12 +49,12 @@ function persist(): void {
 
 // ----------------------------------------------------------------------------- core
 function loadRefs(): { label: string; jpeg: Buffer }[] {
-  const out: { label: string; jpeg: Buffer }[] = [];
-  for (const [file, label] of [['open.jpg', 'the plate press OPEN (lid raised, inside visible)'], ['closed.jpg', 'the plate press CLOSED (lid down, flat block)']] as const) {
-    const f = resolve(REFS_DIR, file);
-    if (existsSync(f)) out.push({ label, jpeg: readFileSync(f) });
-  }
-  return out;
+  // server/refs/open*.jpg and closed*.jpg; set_reference overwrites open.jpg / closed.jpg.
+  if (!existsSync(REFS_DIR)) return [];
+  return readdirSync(REFS_DIR).filter((f) => /^(open|closed)\d*\.jpg$/.test(f)).sort().map((f) => ({
+    label: f.startsWith('open') ? 'the plate press OPEN (lid raised, inside visible)' : 'the plate press CLOSED (lid down, one flat block)',
+    jpeg: readFileSync(resolve(REFS_DIR, f)),
+  }));
 }
 const session = new PressSession(config.params);
 const detector = new Detector({ models: config.models, maxInflight: config.maxInflight, minIntervalMs: config.minIntervalMs, prompt: config.prompt, timeoutMs: config.timeoutMs, refs: loadRefs() });
@@ -343,6 +343,11 @@ wss.on('connection', (ws, req) => {
         if (msg.t === 'hello') { src.info = msg.device ?? msg; log('info', `${id} hello ${JSON.stringify(src.info).slice(0, 160)}`); }
         else if (msg.t === 'gesture') { session.gesture(String(msg.name)); log('info', `gesture ${msg.name} from ${id}`); }
         else if (msg.t === 'chat') void handleChat(String(msg.text ?? ''), id);
+        else if (msg.t === 'status') {
+          const prev = JSON.stringify((src.info as { camera?: unknown } | undefined)?.camera ?? null);
+          src.info = { ...((src.info as object) ?? {}), camera: msg.camera, voice: msg.voice };
+          if (JSON.stringify(msg.camera ?? null) !== prev) log('info', `${id} camera: ${JSON.stringify(msg.camera)}`);
+        }
         else if (msg.t === 'cmd') applyCommand(msg, id);
         else if (msg.t === 'ping') ws.send(JSON.stringify({ t: 'pong', ts: msg.ts, server_now: Date.now() }));
       } catch { /* ignore */ }

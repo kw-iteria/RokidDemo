@@ -55,6 +55,21 @@ close detected 434–564 ms after the closing frame (and backdated), 0 errors.
 * On the glasses side, frame rate/size are already small; the remaining fixed costs are the
   model's time-to-first-token and the round trip to the provider's region.
 
+## Detection hardening (2026-09-24, evening)
+* Problem reports from the real glasses: unrelated objects detected as the press; countdown starting
+  without a close. Causes: a loose prompt ("white box with a lid"), a single high-confidence verdict
+  was enough (gpt-realtime-mini reports 0.9 on nearly everything), and partial/unknown verdicts did
+  not break a streak.
+* Fixes: strict prompt naming the silver glass box and listing what is NOT the press; six reference
+  photos (3 open / 3 closed, phone + glasses perspectives) in every request; strictly consecutive
+  confirmations; no single-verdict shortcut; a close needs the box to have been seen open first;
+  standby until the workflow is started.
+* Benchmark (25 demo frames + 8 negatives, 2 refs): gpt-4.1-mini strict 95%, 0/7 false positives on
+  unrelated images; gpt-realtime-mini strict 80%, 0/7 false positives but it confuses ~1 in 7 closed
+  frames for open. The new prompt WITHOUT reference photos collapses (4.1-mini says "not visible" on
+  everything), so references are mandatory. See `bench-results/ext_refs6_run1.log` for the six-photo run
+  including the new open/closed clips.
+
 ## Timing observed on the replay (assets/press_demo_640.mp4)
 * press seen → "Please close" in ~1.0 s after the first frame
 * lid closed → COUNTDOWN 0.9 s later, countdown backdated by that 0.9 s (ring starts at ~9.1)

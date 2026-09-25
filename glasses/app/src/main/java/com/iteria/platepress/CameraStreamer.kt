@@ -30,6 +30,8 @@ class CameraStreamer(
 
     @Volatile var fps = 0f; private set
     @Volatile var framesSent = 0L; private set
+    @Volatile var status = "starting"; private set
+    @Volatile var lastError = ""; private set
 
     private val executor = Executors.newSingleThreadExecutor()
     private var lastSentAt = 0L
@@ -44,6 +46,7 @@ class CameraStreamer(
                 bind()
             } catch (e: Exception) {
                 Log.e(TAG, "camera init failed", e)
+                status = "init failed"; lastError = e.message ?: e.toString()
             }
         }, ContextCompat.getMainExecutor(context))
     }
@@ -61,11 +64,18 @@ class CameraStreamer(
             .setOutputImageRotationEnabled(true)
             .build()
         analysis.setAnalyzer(executor) { image ->
-            try { onFrame(image) } catch (e: Exception) { Log.w(TAG, "frame failed: ${e.message}") } finally { image.close() }
+            try { onFrame(image) } catch (e: Exception) { Log.w(TAG, "frame failed: ${e.message}"); lastError = e.message ?: e.toString() } finally { image.close() }
         }
-        p.unbindAll()
-        p.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, analysis)
-        Log.i(TAG, "camera bound")
+        try {
+            p.unbindAll()
+            val selector = if (p.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA)) CameraSelector.DEFAULT_BACK_CAMERA else CameraSelector.Builder().build()
+            p.bindToLifecycle(owner, selector, analysis)
+            status = "bound (" + p.availableCameraInfos.size + " camera(s))"
+            Log.i(TAG, "camera bound")
+        } catch (e: Exception) {
+            Log.e(TAG, "camera bind failed", e)
+            status = "bind failed"; lastError = e.message ?: e.toString()
+        }
     }
 
     private fun onFrame(image: ImageProxy) {
@@ -93,6 +103,7 @@ class CameraStreamer(
         bmp.compress(Bitmap.CompressFormat.JPEG, jpegQuality, out)
         sink(out.toByteArray(), bmp.width, bmp.height)
         framesSent++
+        if (framesSent == 1L) status = "streaming " + bmp.width + "x" + bmp.height
     }
 
     fun stop() {

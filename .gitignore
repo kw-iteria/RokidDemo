@@ -19,3 +19,6 @@ glasses/app/*.iml
 bench-results/
 # per-machine console settings written by the server
 config.local.json
+# original phone/glasses captures (large); 640px H.264 copies live in assets/
+open.MOV
+closed.MOV
