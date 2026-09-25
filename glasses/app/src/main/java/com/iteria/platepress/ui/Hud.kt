@@ -144,35 +144,40 @@ private fun Subtitle(state: HudState, u: Dp, modifier: Modifier) {
     }
 }
 
-/** A small friendly robot: round head, two blinking eyes, antenna. Eyes glance around while thinking. */
+/**
+ * The robot mascot: a helmet-shaped head with a face plate, two oval eyes, ear tabs and an antenna.
+ * Eyes blink now and then and glance sideways while thinking; the antenna ball is filled while the
+ * microphone is on. The face plate is drawn black, which is see-through on the waveguide.
+ */
 @Composable
-private fun Robot(u: Dp, thinking: Boolean = false, size: Dp = u * 0.16f, listening: Boolean = true) {
-    val blink by rememberInfiniteTransition(label = "blink").animateFloat(0f, 1f, infiniteRepeatable(tween(3400, easing = LinearEasing)), label = "b")
+private fun Robot(u: Dp, thinking: Boolean = false, size: Dp = u * 0.18f, listening: Boolean = true) {
+    val blink by rememberInfiniteTransition(label = "blink").animateFloat(0f, 1f, infiniteRepeatable(tween(3600, easing = LinearEasing)), label = "b")
     val glance by rememberInfiniteTransition(label = "glance").animateFloat(-1f, 1f, infiniteRepeatable(tween(1100, easing = LinearEasing), RepeatMode.Reverse), label = "g")
-    val bob by rememberInfiniteTransition(label = "bob").animateFloat(0f, 1f, infiniteRepeatable(tween(1600, easing = LinearEasing), RepeatMode.Reverse), label = "o")
+    val bob by rememberInfiniteTransition(label = "bob").animateFloat(0f, 1f, infiniteRepeatable(tween(1700, easing = LinearEasing), RepeatMode.Reverse), label = "o")
     Canvas(Modifier.size(size)) {
         val w = this.size.width; val h = this.size.height
-        val stroke = w * 0.06f
-        val dy = (bob - 0.5f) * h * 0.04f
+        val dy = (bob - 0.5f) * h * 0.035f
+        val plate = Color.Black
         // antenna
-        drawLine(Ink, Offset(w * 0.5f, h * 0.22f + dy), Offset(w * 0.5f, h * 0.08f + dy), stroke, StrokeCap.Round)
-        if (listening) drawCircle(Ink, radius = w * 0.06f, center = Offset(w * 0.5f, h * 0.07f + dy))
-        else drawCircle(Ink, radius = w * 0.06f, center = Offset(w * 0.5f, h * 0.07f + dy), style = Stroke(stroke * 0.6f))
-        // head
-        drawRoundRect(Ink, topLeft = Offset(w * 0.14f, h * 0.22f + dy), size = Size(w * 0.72f, h * 0.62f), cornerRadius = CornerRadius(w * 0.2f), style = Stroke(stroke))
-        // ears
-        drawRoundRect(Ink, topLeft = Offset(w * 0.02f, h * 0.44f + dy), size = Size(w * 0.1f, h * 0.2f), cornerRadius = CornerRadius(w * 0.04f))
-        drawRoundRect(Ink, topLeft = Offset(w * 0.88f, h * 0.44f + dy), size = Size(w * 0.1f, h * 0.2f), cornerRadius = CornerRadius(w * 0.04f))
-        // eyes: blink briefly once per cycle; glance sideways while thinking
-        val closed = blink > 0.93f
-        val ex = if (thinking) glance * w * 0.04f else 0f
-        val eyeY = h * 0.48f + dy
-        for (cx in listOf(w * 0.36f, w * 0.64f)) {
-            if (closed) drawLine(Ink, Offset(cx - w * 0.07f + ex, eyeY), Offset(cx + w * 0.07f + ex, eyeY), stroke, StrokeCap.Round)
-            else drawCircle(Ink, radius = w * 0.075f, center = Offset(cx + ex, eyeY))
+        drawLine(Ink, Offset(w * 0.5f, h * 0.2f + dy), Offset(w * 0.5f, h * 0.09f + dy), w * 0.045f, StrokeCap.Round)
+        if (listening) drawCircle(Ink, radius = w * 0.06f, center = Offset(w * 0.5f, h * 0.075f + dy))
+        else drawCircle(Ink, radius = w * 0.06f, center = Offset(w * 0.5f, h * 0.075f + dy), style = Stroke(w * 0.025f))
+        // cap and helmet
+        drawRoundRect(Ink, topLeft = Offset(w * 0.37f, h * 0.17f + dy), size = Size(w * 0.26f, h * 0.1f), cornerRadius = CornerRadius(w * 0.035f))
+        drawRoundRect(Ink, topLeft = Offset(w * 0.1f, h * 0.23f + dy), size = Size(w * 0.8f, h * 0.66f), cornerRadius = CornerRadius(w * 0.3f, h * 0.3f))
+        // ear tabs
+        drawRoundRect(Ink, topLeft = Offset(w * 0.0f, h * 0.45f + dy), size = Size(w * 0.11f, h * 0.24f), cornerRadius = CornerRadius(w * 0.035f))
+        drawRoundRect(Ink, topLeft = Offset(w * 0.89f, h * 0.45f + dy), size = Size(w * 0.11f, h * 0.24f), cornerRadius = CornerRadius(w * 0.035f))
+        // face plate (see-through on the glasses)
+        drawRoundRect(plate, topLeft = Offset(w * 0.19f, h * 0.33f + dy), size = Size(w * 0.62f, h * 0.45f), cornerRadius = CornerRadius(w * 0.24f, h * 0.26f))
+        // eyes: vertical ovals; a quick blink once per cycle; glance sideways while thinking
+        val closed = blink > 0.94f
+        val ex = if (thinking) glance * w * 0.035f else 0f
+        val eyeW = w * 0.09f
+        val eyeH = if (closed) h * 0.025f else h * 0.16f
+        for (cx in listOf(w * 0.4f, w * 0.6f)) {
+            drawOval(Ink, topLeft = Offset(cx - eyeW / 2 + ex, h * 0.555f - eyeH / 2 + dy), size = Size(eyeW, eyeH))
         }
-        // smile
-        drawArc(Ink, startAngle = 20f, sweepAngle = 140f, useCenter = false, topLeft = Offset(w * 0.36f, h * 0.5f + dy), size = Size(w * 0.28f, h * 0.22f), style = Stroke(stroke, cap = StrokeCap.Round))
     }
 }
 

@@ -134,8 +134,9 @@ button[aria-pressed="true"] { border-color: rgba(140,207,255,0.5); color: var(--
 .chat-log li.streaming::after { content: "▍"; color: var(--ice); animation: pulse 0.8s ease-in-out infinite; }
 
 /* robot in the glasses mirror */
-.hud .robot { width: 15cqw; height: 15cqw; display: none; fill: none; stroke: var(--phosphor); stroke-width: 6; stroke-linecap: round; animation: bob 1.6s ease-in-out infinite alternate; }
+.hud .robot { width: 17cqw; height: 17cqw; display: none; fill: none; stroke: var(--phosphor); stroke-width: 4.5; stroke-linecap: round; animation: bob 1.7s ease-in-out infinite alternate; }
 .hud .robot .fill { fill: var(--phosphor); stroke: none; }
+.hud .robot .plate { fill: #050806; stroke: none; }
 .hud .robot .eye { animation: blink 3.4s linear infinite; transform-origin: center; transform-box: fill-box; }
 .hud[data-phase="IDLE"] .robot { display: block; }
 @keyframes bob { from { transform: translateY(0); } to { transform: translateY(-2px); } }
