@@ -124,6 +124,15 @@ with the live frame plus one open and one closed reference photo to the vision m
 else goes to the text model, which also handles tool calls. If the text vendor fails, the vision
 model answers. Replies are stripped of markdown because they are spoken on the glasses.
 
+## Local CLIP classifier (2026-09-25)
+* Trained on 107 labelled frames from the five clips + 8 negatives, expanded to 410 samples (full
+  frame, zoom crop from the cloud model's bounding box, blurry down-scaled crops for distance,
+  background crops as "none"). Leave-one-clip-out accuracy 87%; open↔closed confusion 10/370 (2.7%),
+  most other errors are "not seen" which never triggers anything.
+* Live: local verdict every frame (51 ms median), cloud verifier at ~2/s. Normal clip: countdown
+  9.27 s (hand leaves at ~9.1 s); far clip: works through the zoom crops. Engine switch in the console
+  ("Second model is" → local / fallback / raced).
+
 ## Spoken replies (2026-09-25)
 * Server-side `gpt-4o-mini-tts` (voice "coral", PCM 24 kHz) streamed per sentence while the reply is
   still being generated; the glasses play it through an AudioTrack and the console through Web Audio.

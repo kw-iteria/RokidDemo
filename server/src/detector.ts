@@ -3,10 +3,11 @@
 import { classifyFrame, type ClassifyResult, type Verdict } from './vision.ts';
 import type { Frame } from './frames.ts';
 import { boxArea, cropAround, cropJpeg, uncrop, ZOOM_TRIGGER_AREA, type Crop } from './zoom.ts';
+import { classifyLocal, localAvailable } from './local.ts';
 
 export interface DetectorConfig {
-  models: string[];        // 1 model, or several: raced per frame, or primary + fallbacks (mode)
-  mode?: 'race' | 'primary';
+  models: string[];        // cloud models: raced per frame, primary + fallbacks, or (mode 'local') the verifier
+  mode?: 'race' | 'primary' | 'local';
   maxInflight: number;     // concurrent frame evaluations
   minIntervalMs: number;   // minimum spacing between submissions
   prompt?: string;
@@ -35,6 +36,7 @@ export interface DetectorStats {
   submitted: number;
   completed: number;
   per_model: Record<string, { wins: number; p50_ms: number; errors: number }>;
+  local?: { count: number; vetoed: number; p50_ms: number };
 }
 
 /** Minimum spacing between requests to rate-limited APIs (ms), and cool-down after a 429. */
@@ -62,6 +64,12 @@ export class Detector {
   private lastBox: { box: [number, number, number, number]; at: number } | null = null;
   private zoomMisses = 0;
   zoomEnabled = true;
+  /** Local mode: the cloud verifier's latest opinion, used to veto contradicting local verdicts and to track the box. */
+  private verifier: { lid: string; at: number } | null = null;
+  private localBusy = false;
+  private lastVerifierSubmit = 0;
+  private verifierInflight = 0;
+  localStats = { count: 0, vetoed: 0, p50_ms: 0, lat: [] as number[] };
   onVerdict: (v: VerdictOut) => void = () => {};
   onError: (model: string, error: string) => void = () => {};
 
@@ -90,8 +98,18 @@ export class Detector {
     if (!this.running || !this.latest) return;
     const f = this.latest;
     if (f.header.seq === this.lastSubmittedSeq && f.recv_ts === this.lastSubmittedRecvTs) return; // each frame is judged once
-    if (this.inflight >= this.config.maxInflight) return;
     const now = Date.now();
+    if (this.config.mode === 'local' && localAvailable()) {
+      if (this.localBusy) return;
+      this.lastSubmittedSeq = f.header.seq;
+      this.lastSubmittedRecvTs = f.recv_ts;
+      this.lastSubmitAt = now;
+      void this.evaluateLocal(f);
+      // the cloud verifier looks at ~2 frames per second
+      if (this.verifierInflight < 2 && now - this.lastVerifierSubmit >= 450) { this.lastVerifierSubmit = now; void this.evaluate(f, true); }
+      return;
+    }
+    if (this.inflight >= this.config.maxInflight) return;
     if (now - this.lastSubmitAt < this.config.minIntervalMs) return;
     this.lastSubmittedSeq = f.header.seq;
     this.lastSubmittedRecvTs = f.recv_ts;
@@ -99,8 +117,41 @@ export class Detector {
     void this.evaluate(f);
   }
 
-  private async evaluate(frame: Frame): Promise<void> {
+  /** Local classifier on the frame (or its zoom crop): fast verdicts that drive the state machine. */
+  private async evaluateLocal(frame: Frame): Promise<void> {
+    this.localBusy = true;
+    const t0 = performance.now();
+    try {
+      let crop: Crop | null = null;
+      let jpeg = frame.jpeg;
+      if (this.zoomEnabled && this.lastBox && Date.now() - this.lastBox.at < 4000 && boxArea(this.lastBox.box) < ZOOM_TRIGGER_AREA) {
+        try { crop = cropAround(this.lastBox.box); jpeg = await cropJpeg(frame.jpeg, crop); } catch { crop = null; jpeg = frame.jpeg; }
+      }
+      const r = await classifyLocal(jpeg);
+      const v: Verdict = { ...r.verdict };
+      // veto: a fresh contradicting opinion from the cloud verifier makes this verdict "uncertain"
+      const fresh = this.verifier && frame.recv_ts - this.verifier.at < 3000;
+      let vetoed = false;
+      if (fresh && v.press_visible && (v.lid === 'open' || v.lid === 'closed') && (this.verifier!.lid === 'open' || this.verifier!.lid === 'closed') && this.verifier!.lid !== v.lid) { v.lid = 'partial'; vetoed = true; }
+      if (fresh && this.verifier!.lid === 'none' && v.press_visible && !crop) { v.press_visible = false; v.lid = 'unknown'; vetoed = true; }
+      const latency_ms = performance.now() - t0;
+      this.localStats.count++; if (vetoed) this.localStats.vetoed++;
+      this.localStats.lat.push(latency_ms); if (this.localStats.lat.length > 40) this.localStats.lat.shift();
+      const sorted = [...this.localStats.lat].sort((a, b) => a - b); this.localStats.p50_ms = Math.round(sorted[Math.floor(sorted.length / 2)] ?? 0);
+      this.completed++; this.completions.push(Date.now());
+      this.onVerdict({ verdict: v, frame, latency_ms, model: vetoed ? 'local/clip (vetoed)' : 'local/clip', zoomed: crop ?? undefined, box_area: this.lastBox ? boxArea(this.lastBox.box) : 0, seen_area: crop ? 0.3 : (this.lastBox ? boxArea(this.lastBox.box) : 0) });
+    } catch (e) {
+      this.errors++;
+      this.onError('local/clip', (e as Error).message);
+    } finally {
+      this.localBusy = false;
+      this.pump();
+    }
+  }
+
+  private async evaluate(frame: Frame, asVerifier = false): Promise<void> {
     this.inflight++;
+    if (asVerifier) this.verifierInflight++;
     this.submitted++;
     const t0 = performance.now();
     const ac = new AbortController();
@@ -159,6 +210,11 @@ export class Detector {
       } else {
         v.bbox = undefined;
       }
+      if (asVerifier) {
+        this.verifier = { lid: !v.press_visible ? 'none' : v.confidence >= 0.8 ? v.lid : 'unsure', at: frame.recv_ts };
+        this.onVerifier?.({ verdict: v, frame, latency_ms, model: winner.model, zoomed: crop ?? undefined, box_area: v.bbox ? boxArea(v.bbox) : 0, seen_area: seenArea });
+        return;
+      }
       this.onVerdict({ verdict: v, frame, latency_ms, model: winner.model, losers: models.filter((m) => m !== winner.model), zoomed: crop ?? undefined, box_area: v.bbox ? boxArea(v.bbox) : 0, seen_area: seenArea });
     } catch (e) {
       this.errors++;
@@ -167,8 +223,12 @@ export class Detector {
       this.onError(models.join('+'), msg);
     } finally {
       this.inflight--;
+      if (asVerifier) this.verifierInflight--;
     }
   }
+
+  /** Verifier verdicts (local mode) for dashboards; they do not drive the state machine. */
+  onVerifier: ((v: VerdictOut) => void) | null = null;
 
   stats(): DetectorStats {
     const now = Date.now();
@@ -185,6 +245,7 @@ export class Detector {
       submitted: this.submitted,
       completed: this.completed,
       per_model: Object.fromEntries([...this.perModel].map(([m, v]) => { const l = [...v.lat].sort((a, b) => a - b); return [m, { wins: v.wins, p50_ms: Math.round(l[Math.floor(l.length / 2)] ?? 0), errors: v.errors }]; })),
+      local: this.config.mode === 'local' ? { count: this.localStats.count, vetoed: this.localStats.vetoed, p50_ms: this.localStats.p50_ms } : undefined,
     };
   }
 }

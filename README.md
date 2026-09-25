@@ -86,6 +86,24 @@ Capture new reference photos of the real press from the console ("Capture open/c
 or by telling the assistant "use this as the closed reference". Verdicts for every frame are visible
 in the console badge (lid, hand, moving, confidence, latency).
 
+## Local classifier (fast path)
+
+`server/model/press_head.json` is a small softmax head on CLIP ViT-B/32 image embeddings
+(transformers.js, runs on the Mac's CPU, ~50 ms per frame; the CLIP weights download once on first
+start). In the default "local" engine every frame is classified locally and drives the state machine;
+the cloud model looks at ~2 frames per second as a verifier: it tracks the press location for the
+zoom, its verdicts also count in the vote, and a fresh contradicting cloud verdict vetoes local ones.
+Result on the clips: the countdown starts 0.1–0.3 s after the lid is down.
+
+Retrain after collecting new clips (frames + cloud bounding boxes → crops → embeddings → head):
+
+```bash
+node tools/bench.ts --frames all --refs --negatives bench-results/negatives \
+  --extra open=bench-results/frames_open,closed=bench-results/frames_closed,open=bench-results/frames_open2,closed=bench-results/frames_closed2 \
+  --models gpt-5.4-mini --dump bench-results/bboxes_gpt54.json
+npm run train:local        # prints leave-one-clip-out accuracy, writes server/model/press_head.json
+```
+
 ## Latency design
 
 * Frames leave the glasses at ~6 fps, 480 px long edge, JPEG q60 (~25 KB). LAN transit is a few ms.

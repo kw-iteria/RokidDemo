@@ -28,6 +28,7 @@
       const msg = JSON.parse(ev.data);
       if (msg.t === 'state') onState(msg);
       else if (msg.t === 'verdict') onVerdict(msg);
+      else if (msg.t === 'verifier') { state.lastVerifier = msg; }
       else if (msg.t === 'log') addLog(msg);
       else if (msg.t === 'chat') addChat(msg, true);
       else if (msg.t === 'chat.delta') addDelta(msg);
@@ -80,7 +81,7 @@
     els.srcPill.className = active ? 'pill ok' : idleGlasses ? 'pill warn' : 'pill';
     els.srcPill.title = idleGlasses && idleGlasses.info.camera.error ? idleGlasses.info.camera.error : '';
     document.querySelector('.viewport').classList.toggle('glasses-live', Boolean(active && active.kind === 'glasses'));
-    els.modelPill.textContent = msg.config.models.join(msg.config.mode === 'race' ? ' ∥ ' : ' → ');
+    els.modelPill.textContent = msg.config.mode === 'local' ? `local CLIP · verified by ${msg.config.models[0]}` : msg.config.models.join(msg.config.mode === 'race' ? ' ∥ ' : ' → ');
     els.latPill.textContent = msg.stats.p50_ms ? `${msg.stats.p50_ms} ms · ${msg.stats.decisions_per_s}/s` : '— ms';
     els.hosts.textContent = msg.hosts.length ? `glasses find this Mac at ${msg.hosts.map((h) => `${h}:${msg.port}`).join(' or ')}` : '';
     if (!state.editing) syncControls(msg);
@@ -114,7 +115,8 @@
   function onVerdict(v) {
     state.verdicts.push(v);
     if (state.verdicts.length > 400) state.verdicts.shift();
-    els.badge.innerHTML = v.press_visible ? `<b>${v.lid}</b>${v.hand_on_press ? ' · hand on it' : ''}${v.motion > 0.25 ? ' · moving' : ''} · ${v.confidence.toFixed(2)} · ${v.latency_ms} ms · ${v.model}` : `<b>press not seen</b> · ${v.latency_ms} ms · ${v.model}`;
+    const ver = state.lastVerifier && Date.now() - state.lastVerifier.server_now < 4000 ? ` · verifier: ${state.lastVerifier.press_visible ? state.lastVerifier.lid : 'not seen'}` : '';
+    els.badge.innerHTML = (v.press_visible ? `<b>${v.lid}</b>${v.hand_on_press ? ' · hand on it' : ''}${v.motion > 0.25 ? ' · moving' : ''} · ${v.confidence.toFixed(2)} · ${v.latency_ms} ms · ${v.model}` : `<b>press not seen</b> · ${v.latency_ms} ms · ${v.model}`) + ver;
     drawRibbon();
   }
 
@@ -155,7 +157,7 @@
       ['Errors', String(st.errors)],
       ['Run', `${s.run} · ${s.phase.toLowerCase().replace('_', ' ')}`],
       ['Last close detection', closedEv ? closedEv.text.replace('closed detected ', '') : '—'],
-      ['Verdicts by model', Object.entries(st.per_model || {}).map(([m, v]) => `${m} ${v.wins} (${v.p50_ms} ms${v.errors ? `, ${v.errors} err` : ''})`).join(' · ') || '—'],
+      ['Verdicts by model', (st.local ? `local ${st.local.count} (${st.local.p50_ms} ms, ${st.local.vetoed} vetoed) · ` : '') + (Object.entries(st.per_model || {}).map(([m, v]) => `${m} ${v.wins} (${v.p50_ms} ms${v.errors ? `, ${v.errors} err` : ''})`).join(' · ') || '—')],
     ].map(([k, v]) => `<div><span>${k}</span>${v}</div>`).join('');
   }
 

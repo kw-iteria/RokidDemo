@@ -154,8 +154,8 @@ export class PressSession {
 
   /** Feed a model verdict. Out-of-order (older-frame) verdicts are dropped. */
   onVerdict(ev: VerdictEvent): void {
-    if (ev.frame_ts < this.lastAcceptedFrameTs) return; // stale: a newer frame was already judged
-    this.lastAcceptedFrameTs = ev.frame_ts;
+    if (ev.frame_ts < this.lastAcceptedFrameTs - 1500) return; // far too stale: much newer frames were already judged
+    this.lastAcceptedFrameTs = Math.max(this.lastAcceptedFrameTs, ev.frame_ts);
     this.lastVerdict = ev;
     const v = ev.verdict;
     if (v.press_visible && v.lid !== 'unknown') this.lastSeenTs = ev.frame_ts;
@@ -169,7 +169,8 @@ export class PressSession {
     const lid = !v.press_visible ? 'none' : v.lid;
     if (!(moving && v.press_visible)) {
       this.window.push({ ts: ev.frame_ts, lid, hand: Boolean(v.hand_on_press), far });
-      const keepFrom = ev.frame_ts - Math.max(this.params.settle_ms, 1500) * 2;
+      this.window.sort((a, b) => a.ts - b.ts);
+      const keepFrom = Math.max(ev.frame_ts, this.lastAcceptedFrameTs) - Math.max(this.params.settle_ms, 1500) * 2;
       this.window = this.window.filter((w) => w.ts >= keepFrom);
       if (lid === 'open' && !far) this.openSeen++;
     }
@@ -184,14 +185,15 @@ export class PressSession {
      */
     const vote = (state: 'open' | 'closed', settle: number) => {
       const span = settle + 500; // contradiction lookback: a little longer than the settle time
-      const from = ev.frame_ts - span;
-      const recent = this.window.filter((w) => w.ts >= from);
+      const now = Math.max(ev.frame_ts, this.lastAcceptedFrameTs);
+      const from = now - span;
+      const recent = this.window.filter((w) => w.ts >= from && w.lid !== 'none'); // "not seen" neither agrees nor contradicts
       const agree = recent.filter((w) => w.lid === state);
       const contradict = recent.filter((w) => w.lid === (state === 'open' ? 'closed' : 'open'));
       const anyFar = agree.some((w) => w.far);
       const firstAgree = agree[0]?.ts ?? 0;
       const handFree = agree.length > 0 && agree.slice(-this.params.confirmations).every((w) => !w.hand);
-      const ok = agree.length >= this.params.confirmations && contradict.length === 0 && !anyFar && agree.length >= recent.length * 0.6 && ev.frame_ts - firstAgree >= settle;
+      const ok = agree.length >= this.params.confirmations && contradict.length === 0 && !anyFar && agree.length >= recent.length * 0.6 && now - firstAgree >= settle;
       return { ok, count: agree.length, firstTs: firstAgree, handFree };
     };
     // keep the old streak fields roughly meaningful for the diagnostics line

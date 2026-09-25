@@ -15,6 +15,7 @@ import { CANDIDATE_MODELS, DEFAULT_PROMPT } from './vision.ts';
 import { Agent, transcribePcm16, type ChatMessage } from './agent.ts';
 import { motionScore } from './motion.ts';
 import { DEFAULT_VOICE, Speaker, type VoiceConfig } from './tts.ts';
+import { localAvailable, loadExtractor } from './local.ts';
 
 loadEnv();
 const ROOT = resolve(import.meta.dirname, '..', '..');
@@ -26,7 +27,7 @@ const REFS_DIR = resolve(ROOT, 'server', 'refs');
 interface CameraConfig { rotation: 0 | 90 | 180 | 270; mirror: boolean; longEdge: number; fps: number; aspect: 'native' | 'landscape' | 'square' }
 interface AppConfig {
   models: string[];
-  mode: 'race' | 'primary';
+  mode: 'race' | 'primary' | 'local';
   camera: CameraConfig;
   chatFast: string;    // text-only conversation + tool calls
   chatVision: string;  // questions about the camera view
@@ -40,7 +41,7 @@ interface AppConfig {
 }
 const config: AppConfig = {
   models: (process.env.PRESS_MODELS ?? 'gpt-5.4-mini,gpt-4.1-mini').split(',').map((s) => s.trim()).filter(Boolean),
-  mode: (process.env.PRESS_MODE as 'race' | 'primary') ?? 'primary',
+  mode: (process.env.PRESS_MODE as 'race' | 'primary' | 'local') ?? (localAvailable() ? 'local' : 'primary'),
   camera: { rotation: 0, mirror: false, longEdge: 720, fps: 6, aspect: 'native' },
   chatFast: process.env.CHAT_FAST_MODEL ?? 'groq/qwen/qwen3.8-27b',
   chatVision: process.env.CHAT_VISION_MODEL ?? 'gpt-4.1-mini',
@@ -138,6 +139,17 @@ detector.onVerdict = (v) => {
   broadcast(JSON.stringify({ t: 'verdict', ...v.verdict, motion: +motion.toFixed(3), box_area: +(v.box_area ?? 0).toFixed(3), zoomed: Boolean(v.zoomed), latency_ms: Math.round(v.latency_ms), model: v.model, seq: v.frame.header.seq, frame_ts: v.frame.recv_ts, server_now: Date.now() }));
 };
 detector.onError = (model, err) => log('warn', `model error (${model}): ${err.slice(0, 200)}`);
+detector.onVerifier = (v) => {
+  const motion = typeof v.frame.header.motion === 'number' ? v.frame.header.motion : 0;
+  recentVerdicts.push({ at: v.frame.recv_ts, phase: session.phase, ...v.verdict, motion: +motion.toFixed(3), box_area: +(v.box_area ?? 0).toFixed(3), seen_area: +(v.seen_area ?? 0).toFixed(3), zoomed: Boolean(v.zoomed), latency_ms: Math.round(v.latency_ms), model: `${v.model} (verifier)`, seq: v.frame.header.seq });
+  judgedFrames.push(v.frame.jpeg);
+  if (recentVerdicts.length > 150) { recentVerdicts.shift(); judgedFrames.shift(); }
+  broadcast(JSON.stringify({ t: 'verifier', ...v.verdict, latency_ms: Math.round(v.latency_ms), model: v.model, frame_ts: v.frame.recv_ts, server_now: Date.now() }));
+  // The verifier's opinion also counts: when the local classifier is unsure (small, blurry press) the
+  // cloud verdicts carry the state machine at cloud speed; when both see it, they must agree.
+  session.onVerdict({ verdict: v.verdict, frame_ts: v.frame.recv_ts, latency_ms: v.latency_ms, model: v.model, seq: v.frame.header.seq, motion, box_area: v.seen_area });
+};
+if (config.mode === 'local' && localAvailable()) { loadExtractor().then(() => log('info', 'local classifier ready (CLIP ViT-B/32)')).catch((e) => log('warn', `local classifier failed to load: ${(e as Error).message}`)); }
 session.onChange((snap, changed) => { if (changed) { log('info', `phase → ${snap.phase}`); broadcastState(); } });
 setInterval(() => { if (session.phase !== 'IDLE' && !activeSourceId()) session.idle('camera lost'); session.tick(); }, 100);
 setInterval(() => broadcastState(), 500);
@@ -276,7 +288,7 @@ function applyCommand(msg: Record<string, unknown>, from: string): void {
     case 'set': {
       const c = (msg.config ?? {}) as Partial<AppConfig>;
       if (Array.isArray(c.models) && c.models.length) config.models = c.models.map(String);
-      if (c.mode === 'race' || c.mode === 'primary') config.mode = c.mode;
+      if (c.mode === 'race' || c.mode === 'primary' || c.mode === 'local') config.mode = c.mode;
       if (typeof c.chatFast === 'string' && c.chatFast.trim()) { config.chatFast = c.chatFast.trim(); agent.models.fast = config.chatFast; }
       if (typeof c.chatVision === 'string' && c.chatVision.trim()) { config.chatVision = c.chatVision.trim(); agent.models.vision = config.chatVision; }
       if (c.voice && typeof c.voice === 'object') {
