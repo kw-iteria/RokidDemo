@@ -97,6 +97,12 @@
     <label>Press time (s)
       <input id="dwell" type="number" min="1" max="600" value="10">
     </label>
+    <label>Lid at rest for (ms)
+      <input id="settle" type="number" min="0" max="5000" step="100" value="700">
+    </label>
+    <label>Hand must let go
+      <select id="handfree"><option value="true">yes</option><option value="false">no</option></select>
+    </label>
   </div>
   <div class="row actions">
     <button id="btn-start" class="primary">Start workflow</button>

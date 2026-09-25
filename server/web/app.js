@@ -8,7 +8,7 @@
     hud: $('hud'), arc: $('dial-arc'), number: $('hud-number'), message: $('hud-message'), sub: $('hud-sub'),
     footL: $('hud-foot-left'), footR: $('hud-foot-right'), timing: $('timing'),
     source: $('source'), model: $('model'), model2: $('model2'), mode: $('mode'), inflight: $('inflight'), interval: $('interval'),
-    confirm: $('confirm'), dwell: $('dwell'), hosts: $('hosts'), log: $('log'),
+    confirm: $('confirm'), dwell: $('dwell'), settle: $('settle'), handfree: $('handfree'), hosts: $('hosts'), log: $('log'),
     prompt: $('prompt'), promptBox: $('prompt-box'),
     camRot: $('cam-rot'), camMirror: $('cam-mirror'), camAspect: $('cam-aspect'), camEdge: $('cam-edge'), camFps: $('cam-fps'),
     chatLog: $('chat-log'), chatForm: $('chat-form'), chatInput: $('chat-input'), chatThinking: $('chat-thinking'), mic: $('btn-mic'), hudChat: $('hud-chat'),
@@ -83,13 +83,15 @@
     els.interval.value = msg.config.minIntervalMs;
     els.confirm.value = msg.config.params.confirmations;
     els.dwell.value = Math.round(msg.config.params.countdown_ms / 1000);
+    els.settle.value = msg.config.params.settle_ms ?? 700;
+    els.handfree.value = String(msg.config.params.hand_free_close ?? true);
     if (document.activeElement !== els.prompt) els.prompt.value = msg.config.prompt;
   }
 
   function onVerdict(v) {
     state.verdicts.push(v);
     if (state.verdicts.length > 400) state.verdicts.shift();
-    els.badge.innerHTML = v.press_visible ? `<b>${v.lid}</b> · ${v.confidence.toFixed(2)} · ${v.latency_ms} ms · ${v.model}` : `<b>press not seen</b> · ${v.latency_ms} ms · ${v.model}`;
+    els.badge.innerHTML = v.press_visible ? `<b>${v.lid}</b>${v.hand_on_press ? ' · hand on it' : ''}${v.motion > 0.25 ? ' · moving' : ''} · ${v.confidence.toFixed(2)} · ${v.latency_ms} ms · ${v.model}` : `<b>press not seen</b> · ${v.latency_ms} ms · ${v.model}`;
     drawRibbon();
   }
 
@@ -203,9 +205,9 @@
     models: [els.model.value, els.model2.value].filter(Boolean),
     mode: els.mode.value,
     maxInflight: Number(els.inflight.value), minIntervalMs: Number(els.interval.value),
-    params: { confirmations: Number(els.confirm.value), countdown_ms: Number(els.dwell.value) * 1000 },
+    params: { confirmations: Number(els.confirm.value), countdown_ms: Number(els.dwell.value) * 1000, settle_ms: Number(els.settle.value), hand_free_close: els.handfree.value === 'true' },
   } });
-  for (const el of [els.model, els.model2, els.mode, els.inflight, els.interval, els.confirm, els.dwell]) {
+  for (const el of [els.model, els.model2, els.mode, els.inflight, els.interval, els.confirm, els.dwell, els.settle, els.handfree]) {
     el.addEventListener('focus', () => (state.editing = true));
     el.addEventListener('blur', () => (state.editing = false));
     el.addEventListener('change', pushConfig);
@@ -273,13 +275,22 @@
     camWs = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/webcam`);
     camWs.onopen = () => camWs.send(JSON.stringify({ t: 'hello', device: { kind: 'browser-webcam', ua: navigator.userAgent.slice(0, 60) } }));
     let seq = 0;
+    let prevSmall = null;
+    const smallCanvas = document.createElement('canvas'); smallCanvas.width = 48; smallCanvas.height = 36;
+    const measureMotion = () => {
+      const c = smallCanvas.getContext('2d', { willReadFrequently: true }); c.drawImage(video, 0, 0, 48, 36);
+      const d = c.getImageData(0, 0, 48, 36).data; const cur = new Uint8Array(48 * 36);
+      for (let i = 0; i < cur.length; i++) cur[i] = (d[i * 4] * 77 + d[i * 4 + 1] * 150 + d[i * 4 + 2] * 29) >> 8;
+      let sum = 0; if (prevSmall) for (let i = 0; i < cur.length; i++) sum += Math.abs(cur[i] - prevSmall[i]);
+      const score = prevSmall ? Math.min(1, sum / cur.length / 40) : 0; prevSmall = cur; return score;
+    };
     camTimer = setInterval(() => {
       if (!camWs || camWs.readyState !== 1 || camWs.bufferedAmount > 200_000) return;
       const w = 480, h = Math.round((480 * video.videoHeight) / (video.videoWidth || 640));
       canvas.width = w; canvas.height = h;
       canvas.getContext('2d').drawImage(video, 0, 0, w, h);
       canvas.toBlob(async (blob) => {
-        const header = new TextEncoder().encode(JSON.stringify({ seq: seq++, ts: Date.now(), w, h }));
+        const header = new TextEncoder().encode(JSON.stringify({ seq: seq++, ts: Date.now(), w, h, motion: +measureMotion().toFixed(3) }));
         const out = new Uint8Array(2 + header.length + blob.size);
         out[0] = header.length >> 8; out[1] = header.length & 255; out.set(header, 2); out.set(new Uint8Array(await blob.arrayBuffer()), 2 + header.length);
         camWs.send(out);

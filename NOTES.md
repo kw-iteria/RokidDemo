@@ -91,6 +91,18 @@ close detected 434–564 ms after the closing frame (and backdated), 0 errors.
   completion shows ~1.5 s after the lid opens. If speed matters more than certainty, switch the console
   to "raced" with gpt-realtime-mini and remove all but two reference photos.
 
+## "Countdown before fully closed" fix (2026-09-24, late)
+* Added two "not closed yet" reference photos (lid mid-way, hand on it), a `hand_on_press` field,
+  and a stricter definition of closed; the state machine now also needs the hand off the press,
+  the lid at rest for 700 ms, and still frames (motion score from the glasses / webcam / jpeg-js on
+  the server for replays).
+* Benchmark on 99 labelled frames from all five clips plus 8 negatives with the eight reference
+  photos: gpt-5.4-mini 98% on unambiguous frames (the two misses were "partial", which never
+  triggers anything), 0/4 false positives on unrelated images, p50 0.87 s; gpt-4.1-mini dropped to
+  74% with this many references and stays only as the error fallback.
+* On the demo clip the countdown now starts at the moment the hand leaves the closed lid
+  (3 verdicts over ~0.8 s, backdated), not while the lid is still coming down.
+
 ## Timing observed on the replay (assets/press_demo_640.mp4)
 * press seen → "Please close" in ~1.0 s after the first frame
 * lid closed → COUNTDOWN 0.9 s later, countdown backdated by that 0.9 s (ring starts at ~9.1)

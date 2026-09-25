@@ -13,6 +13,7 @@ import { startReplay } from './replay.ts';
 import { startBeacon, lanAddresses } from './beacon.ts';
 import { CANDIDATE_MODELS, DEFAULT_PROMPT } from './vision.ts';
 import { Agent, transcribePcm16, type ChatMessage } from './agent.ts';
+import { motionScore } from './motion.ts';
 
 loadEnv();
 const ROOT = resolve(import.meta.dirname, '..', '..');
@@ -56,8 +57,8 @@ function persist(): void {
 function loadRefs(): { label: string; jpeg: Buffer }[] {
   // server/refs/open*.jpg and closed*.jpg; set_reference overwrites open.jpg / closed.jpg.
   if (!existsSync(REFS_DIR)) return [];
-  return readdirSync(REFS_DIR).filter((f) => /^(open|closed)\d*\.jpg$/.test(f)).sort().map((f) => ({
-    label: f.startsWith('open') ? 'the plate press OPEN (lid raised, inside visible)' : 'the plate press CLOSED (lid down, one flat block)',
+  return readdirSync(REFS_DIR).filter((f) => /^(open|closed|partial)\d*\.jpg$/.test(f)).sort().map((f) => ({
+    label: f.startsWith('open') ? 'the plate press OPEN (lid raised, inside visible)' : f.startsWith('closed') ? 'the plate press CLOSED (lid down, one flat block, nothing touching it)' : 'the plate press NOT CLOSED YET (lid tilted / still moving / hand on it) — this counts as "partial"',
     jpeg: readFileSync(resolve(REFS_DIR, f)),
   }));
 }
@@ -98,6 +99,7 @@ function sourceFps(s: Source): number {
 }
 
 function onFrame(source: Source, frame: Frame): void {
+  if (typeof frame.header.motion !== 'number') frame.header.motion = motionScore(source.id, frame.jpeg); // sources that don't measure it themselves
   source.lastFrameAt = frame.recv_ts;
   source.frames.push(frame.recv_ts);
   source.seq++;
@@ -119,8 +121,9 @@ function onFrame(source: Source, frame: Frame): void {
 }
 
 detector.onVerdict = (v) => {
-  session.onVerdict({ verdict: v.verdict, frame_ts: v.frame.recv_ts, latency_ms: v.latency_ms, model: v.model, seq: v.frame.header.seq });
-  broadcast(JSON.stringify({ t: 'verdict', ...v.verdict, latency_ms: Math.round(v.latency_ms), model: v.model, seq: v.frame.header.seq, frame_ts: v.frame.recv_ts, server_now: Date.now() }));
+  const motion = typeof v.frame.header.motion === 'number' ? v.frame.header.motion : 0;
+  session.onVerdict({ verdict: v.verdict, frame_ts: v.frame.recv_ts, latency_ms: v.latency_ms, model: v.model, seq: v.frame.header.seq, motion });
+  broadcast(JSON.stringify({ t: 'verdict', ...v.verdict, motion: +motion.toFixed(3), latency_ms: Math.round(v.latency_ms), model: v.model, seq: v.frame.header.seq, frame_ts: v.frame.recv_ts, server_now: Date.now() }));
 };
 detector.onError = (model, err) => log('warn', `model error (${model}): ${err.slice(0, 200)}`);
 session.onChange((snap, changed) => { if (changed) { log('info', `phase → ${snap.phase}`); broadcastState(); } });

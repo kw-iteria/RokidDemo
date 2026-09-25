@@ -123,7 +123,7 @@ class AppModel(context: Context) {
         alarmJob = null
     }
 
-    fun onFrame(jpeg: ByteArray, w: Int, h: Int) { link.sendFrame(jpeg, w, h) }
+    fun onFrame(jpeg: ByteArray, w: Int, h: Int, motion: Float) { link.sendFrame(jpeg, w, h, motion) }
     fun gesture(name: String) { link.sendJson(JSONObject().put("t", "gesture").put("name", name)) }
     fun toggleVoice(): Boolean {
         sounds.voiceEnabled = !sounds.voiceEnabled

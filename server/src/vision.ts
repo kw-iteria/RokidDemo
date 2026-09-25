@@ -11,6 +11,7 @@ export interface Verdict {
   press_visible: boolean;
   lid: LidState;
   confidence: number; // 0..1
+  hand_on_press?: boolean; // a hand is touching / holding / moving the press
 }
 
 export interface ClassifyOptions {
@@ -34,10 +35,11 @@ export interface ClassifyResult {
 }
 
 export const DEFAULT_PROMPT = `You are the vision checker for a lab workflow, looking through the wearer's smart-glasses camera.
-The PLATE PRESS in this demo is ONE specific object: a small rectangular silver / light-gray glass box with a hinged lid, about the size of a glasses case, usually lying on a dark table. Reference photos of this exact box (open and closed) are provided before the live frame.
+The PLATE PRESS in this demo is ONE specific object: a small rectangular silver / light-gray glass box with a hinged lid, about the size of a glasses case, usually lying on a dark table. Reference photos of this exact box are provided before the live frame: OPEN, CLOSED, and NOT-CLOSED-YET (lid still moving).
 Rules:
 - press_visible is true ONLY when this specific box is clearly in the live frame. Hands, phones, laptops, keyboards, papers, cups, bottles, other boxes, cases, containers, furniture, walls or an empty table are NOT the press: then press_visible is false and lid is "unknown".
-- lid: "open" when the lid is raised so the inside of the box is visible; "closed" when the lid is fully down and the box is one flat closed block; "partial" while the lid is being moved or is half way; "unknown" when the press is not visible.
+- lid: "closed" ONLY when the lid lies completely flat on the base with no gap, no tilt and no hand holding it, so the box is one flat closed block; "open" when the lid is raised so the inside of the box is visible; "partial" whenever the lid is tilted, has a gap, is being moved, or a hand is pressing or holding it; "unknown" when the press is not visible. When in doubt between closed and partial, answer "partial".
+- hand_on_press: true if a hand or fingers touch, hold or move the press.
 - confidence (0 to 1) is how sure you are of BOTH press_visible and lid. Use 0.4 or less whenever you are guessing.
 Answer with the JSON object only.`;
 
@@ -46,9 +48,10 @@ const JSON_SCHEMA = {
   properties: {
     press_visible: { type: 'boolean' },
     lid: { type: 'string', enum: ['open', 'closed', 'partial', 'unknown'] },
+    hand_on_press: { type: 'boolean' },
     confidence: { type: 'number' },
   },
-  required: ['press_visible', 'lid', 'confidence'],
+  required: ['press_visible', 'lid', 'hand_on_press', 'confidence'],
   additionalProperties: false,
 } as const;
 
@@ -57,10 +60,11 @@ const GEMINI_SCHEMA = {
   properties: {
     press_visible: { type: 'BOOLEAN' },
     lid: { type: 'STRING', enum: ['open', 'closed', 'partial', 'unknown'] },
+    hand_on_press: { type: 'BOOLEAN' },
     confidence: { type: 'NUMBER' },
   },
-  required: ['press_visible', 'lid', 'confidence'],
-  propertyOrdering: ['press_visible', 'lid', 'confidence'],
+  required: ['press_visible', 'lid', 'hand_on_press', 'confidence'],
+  propertyOrdering: ['press_visible', 'lid', 'hand_on_press', 'confidence'],
 };
 
 /**
@@ -146,6 +150,7 @@ function parseVerdict(text: string): Verdict {
     press_visible: Boolean(obj.press_visible),
     lid: (['open', 'closed', 'partial', 'unknown'] as LidState[]).includes(lid as LidState) ? (lid as LidState) : 'unknown',
     confidence: Math.max(0, Math.min(1, Number(obj.confidence ?? 0.5))),
+    hand_on_press: obj.hand_on_press === undefined ? undefined : Boolean(obj.hand_on_press),
   };
 }
 

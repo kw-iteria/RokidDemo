@@ -79,7 +79,7 @@ class MainActivity : ComponentActivity() {
 
     private fun startCamera() {
         if (camera != null) return
-        camera = CameraStreamer(this, this) { jpeg, w, h -> model.onFrame(jpeg, w, h) }.also { c ->
+        camera = CameraStreamer(this, this) { jpeg, w, h, motion -> model.onFrame(jpeg, w, h, motion) }.also { c ->
             pendingCamera?.let { j ->
                 c.extraRotation = j.optInt("rotation", 0); c.mirror = j.optBoolean("mirror", false)
                 c.targetLongEdge = j.optInt("longEdge", 480); c.targetFps = j.optDouble("fps", 6.0)

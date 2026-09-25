@@ -1,5 +1,5 @@
 // Binary frame envelope used on every WebSocket: [u16 headerLen BE][JSON header][JPEG bytes]
-// Header: { seq, ts (sender clock ms), w?, h?, src? }
+// Header: { seq, ts (sender clock ms), w?, h?, src?, motion? (0..1 frame-to-frame change measured by the sender) }
 
 export interface FrameHeader {
   seq: number;
@@ -7,6 +7,7 @@ export interface FrameHeader {
   w?: number;
   h?: number;
   src?: string;
+  motion?: number;
   [k: string]: unknown;
 }
 

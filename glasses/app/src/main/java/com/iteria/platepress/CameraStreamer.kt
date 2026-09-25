@@ -20,8 +20,25 @@ import java.util.concurrent.Executors
 class CameraStreamer(
     private val context: Context,
     private val owner: LifecycleOwner,
-    private val sink: (jpeg: ByteArray, w: Int, h: Int) -> Unit,
+    private val sink: (jpeg: ByteArray, w: Int, h: Int, motion: Float) -> Unit,
 ) {
+    private var prevSmall: IntArray? = null
+    private val smallW = 48
+    private val smallH = 36
+
+    /** Mean absolute gray change versus the previous sent frame, 0..1 (≈40 gray levels = 1). */
+    private fun motionScore(bmp: Bitmap): Float {
+        val small = Bitmap.createScaledBitmap(bmp, smallW, smallH, false)
+        val px = IntArray(smallW * smallH)
+        small.getPixels(px, 0, smallW, 0, 0, smallW, smallH)
+        for (i in px.indices) { val c = px[i]; px[i] = ((c shr 16 and 0xff) * 77 + (c shr 8 and 0xff) * 150 + (c and 0xff) * 29) shr 8 }
+        val prev = prevSmall
+        prevSmall = px
+        if (prev == null) return 0f
+        var sum = 0L
+        for (i in px.indices) sum += kotlin.math.abs(px[i] - prev[i])
+        return (sum.toFloat() / px.size / 40f).coerceIn(0f, 1f)
+    }
     var targetFps = 6.0
     var targetLongEdge = 480
     var jpegQuality = 60
@@ -110,9 +127,10 @@ class CameraStreamer(
             if (rotation != 0) m.postRotate(rotation.toFloat())
             bmp = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, m, true)
         }
+        val motion = motionScore(bmp)
         out.reset()
         bmp.compress(Bitmap.CompressFormat.JPEG, jpegQuality, out)
-        sink(out.toByteArray(), bmp.width, bmp.height)
+        sink(out.toByteArray(), bmp.width, bmp.height, motion)
         framesSent++
         if (framesSent == 1L) status = "streaming " + bmp.width + "x" + bmp.height
     }

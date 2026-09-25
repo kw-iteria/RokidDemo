@@ -54,13 +54,26 @@ No glasses at hand? In the console press **Replay demo clip** (the phone video i
 
 ## Detection
 
-The vision model is told that the press is one specific object and is shown reference photos of it
-(open and closed, from the phone clip and from the glasses clips) with every frame, so hands, laptops,
-papers and other boxes are not mistaken for it. State changes need two strictly consecutive agreeing
-verdicts, a close is only accepted after the box was seen open in that run (or after a long unbroken
-closed streak if it was closed from the start), and the workflow only runs after you start it.
+How open/closed is decided, frame by frame:
+
+1. The glasses send a 480 px JPEG about six times a second, each tagged with a motion score
+   (how much the picture changed since the previous frame).
+2. Up to four frames are in flight at once. Each goes to the primary vision model
+   (`gpt-5.4-mini`, fallback `gpt-4.1-mini`) with a strict description of the press, eight reference
+   photos of this exact box (open, closed, and "not closed yet" with the lid mid-way), and a JSON
+   schema. The answer is `press_visible`, `lid` (open / closed / partial / unknown),
+   `hand_on_press`, `confidence`. "Closed" is defined as lid flat, no gap, no tilt, nothing touching it;
+   anything else is "partial".
+3. The state machine only counts strictly consecutive identical verdicts on still frames
+   (motion below a threshold). A close needs, in this order: the box seen open earlier in the run,
+   `confirmations` closed verdicts in a row, the hand off the press for those verdicts, and the lid
+   at rest for `settle_ms` (700 ms). The countdown is then backdated to the first hand-free closed
+   frame, so the 10 s still runs from the real closing moment.
+4. Opening needs `confirmations` open verdicts in a row; partial/moving frames never count.
+
 Capture new reference photos of the real press from the console ("Capture open/closed from live view")
-or by telling the assistant "use this as the closed reference".
+or by telling the assistant "use this as the closed reference". Verdicts for every frame are visible
+in the console badge (lid, hand, moving, confidence, latency).
 
 ## Latency design
 

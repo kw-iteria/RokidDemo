@@ -9,8 +9,11 @@
     "dev": "node --watch server/src/main.ts",
     "bench": "node tools/bench.ts"
   },
-  "engines": { "node": ">=22.6" },
+  "engines": {
+    "node": ">=22.6"
+  },
   "dependencies": {
+    "jpeg-js": "^0.4.4",
     "ws": "^8.18.0"
   }
 }

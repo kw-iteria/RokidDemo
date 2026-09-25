@@ -79,11 +79,11 @@ class ServerLink(
     }
 
     /** Sends one JPEG in the shared envelope: [u16 headerLen][JSON header][JPEG]. Drops the frame when the socket is congested. */
-    fun sendFrame(jpeg: ByteArray, w: Int, h: Int): Boolean {
+    fun sendFrame(jpeg: ByteArray, w: Int, h: Int, motion: Float = 0f): Boolean {
         val socket = ws ?: return false
         if (!connected) return false
         if (socket.queueSize() > 400_000L) return false
-        val header = JSONObject().put("seq", seq++).put("ts", System.currentTimeMillis()).put("w", w).put("h", h).toString().toByteArray()
+        val header = JSONObject().put("seq", seq++).put("ts", System.currentTimeMillis()).put("w", w).put("h", h).put("motion", (motion * 1000).toInt() / 1000.0).toString().toByteArray()
         val out = ByteArray(2 + header.size + jpeg.size)
         out[0] = (header.size shr 8).toByte()
         out[1] = (header.size and 0xff).toByte()

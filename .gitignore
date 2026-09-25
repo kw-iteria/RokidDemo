@@ -22,3 +22,5 @@ config.local.json
 # original phone/glasses captures (large); 640px H.264 copies live in assets/
 open.MOV
 closed.MOV
+open_1.MOV
+close_1.MOV
