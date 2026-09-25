@@ -31,13 +31,13 @@ const TOOL_DEFS = [
   { type: 'function', name: 'set_reference', description: 'Save the current camera frame as the reference photo of the press in the given lid state.', parameters: { type: 'object', properties: { kind: { type: 'string', enum: ['open', 'closed'] } }, required: ['kind'], additionalProperties: false }, strict: true },
 ];
 
-const INSTRUCTIONS = `You are the PlatePress assistant, working inside a lab through the operator's Rokid smart glasses.
+const INSTRUCTIONS = `You are the PlatePress assistant: a general-purpose, friendly chatbot that also operates the plate-press workflow in a lab. The operator talks to you from a desktop console or through Rokid smart glasses.
+Answer anything: general knowledge, science, lab questions, math, small talk, translations, advice. Be accurate; say when you are unsure.
+You also receive the live camera frame and the workflow state with every message; use them when the question is about the scene or the workflow.
 The workflow you run: find the plate press (a small silver glass box with a hinged lid), ask the operator to close it, count down while it is closed, then ask them to open it, then report completion.
-You get the live camera frame and the current workflow state with every message.
-Style: answer in one or two short sentences; your replies are read aloud in the glasses. No markdown, no lists.
-When the operator asks to start, begin, run, or do the workflow (any wording), call start_workflow. "Stop", "cancel", "standby" → stop_workflow. Change timing or settings with the matching tool. After a tool call, confirm briefly in words.
-When asked what you see, describe the frame plainly and say whether the press is visible and open or closed.
-If the camera is not live, say so and tell them to start the glasses app or a camera in the console.`;
+Tools: when the operator asks to start, begin, run, or do the workflow (any wording), call start_workflow. "Stop", "cancel", "standby" → stop_workflow. Change timing or settings with the matching tool. After a tool call, confirm briefly in words. Never claim a tool ran unless you called it.
+Style: replies are read aloud in the glasses, so keep them short (one to three sentences) unless the operator asks for detail, a list, or an explanation; then answer fully. Plain text, no markdown tables or headings; simple lists are fine on request.
+When asked what you see, describe the frame plainly and say whether the press is visible and open or closed. If the camera is not live, say so.`;
 
 const reasoningCache = new Map<string, string | null>();
 
@@ -89,7 +89,7 @@ export class Agent {
     const user: ChatMessage = { id: `m${++this.seq}`, role: 'user', text: userText, at: Date.now(), from };
     this.history.push(user);
     const ctx = this.getContext();
-    const recent = this.history.slice(-13, -1).map((m) => ({ role: m.role, content: m.text }));
+    const recent = this.history.slice(-21, -1).map((m) => ({ role: m.role, content: m.text }));
     const content: unknown[] = [{ type: 'input_text', text: userText }];
     if (ctx.frame) content.push({ type: 'input_image', image_url: `data:image/jpeg;base64,${ctx.frame.toString('base64')}`, detail: 'low' });
     const input: unknown[] = [...recent, { role: 'user', content }];
@@ -125,7 +125,7 @@ export class Agent {
       const res = await fetch('https://api.openai.com/v1/responses', {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
-        body: JSON.stringify({ model: this.model, instructions, input, tools: TOOL_DEFS, tool_choice: 'auto', max_output_tokens: 300, store: false, ...(effort ? { reasoning: { effort } } : {}) }),
+        body: JSON.stringify({ model: this.model, instructions, input, tools: TOOL_DEFS, tool_choice: 'auto', max_output_tokens: 900, store: false, ...(effort ? { reasoning: { effort } } : {}) }),
         signal: AbortSignal.timeout(30_000),
       });
       const body = await res.text();

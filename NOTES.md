@@ -76,6 +76,16 @@ close detected 434–564 ms after the closing frame (and backdated), 0 errors.
   The new prompt WITHOUT reference photos collapses (4.1-mini says "not visible" on everything), so
   references are mandatory. Detection mode is now "primary + fallback" instead of a race: a race
   returns the fastest model's answer, which was the least accurate one.
+* Other vendors tried on the same 76 frames (keys added by the user):
+
+  | model | p50 | strict | notes |
+  |---|---|---|---|
+  | moondream (cloud `/query`, one-word question) | **0.18–0.26 s** | 83% | fastest by far, but no reference photos possible: calls several open glasses-angle frames "closed" and 4/8 unrelated images "closed"; hard rate limit (burst ~36 requests, then 429; 2.5 req/s is sustainable). Would likely be excellent after a Moondream fine-tune on the open/closed clips. Selectable as "moondream" in the console; the server paces it and falls back on 429. |
+  | xai/grok-4.20-0309-non-reasoning | 0.68 s | 35% | reads the images but mostly answers "not visible" with the strict prompt |
+  | xai/grok-4.7 | 5–16 s | — | reasoning model, far too slow |
+  | groq/qwen/qwen3.8-27b | — | — | rejects multi-image input (0/76) |
+  | cerebras/qwen-3.8-27b | — | — | returns empty content for image requests |
+
 * Cost of the accuracy: verdicts take ~1.1 s instead of ~0.45 s, so a close is confirmed about
   1.5–2 s after the lid goes down (the countdown is backdated, so the 10 s is still exact) and the
   completion shows ~1.5 s after the lid opens. If speed matters more than certainty, switch the console

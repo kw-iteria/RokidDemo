@@ -14,6 +14,7 @@ for (let i = 2; i < process.argv.length; i++) {
 }
 const models = (args.get('models') ?? CANDIDATE_MODELS.join(',')).split(',').map((s) => s.trim()).filter(Boolean);
 const concurrency = Number(args.get('concurrency') ?? 3);
+const paceMs = Number(args.get('pace') ?? 0); // minimum spacing between request starts (rate-limited APIs)
 const width = Number(args.get('width') ?? 480);
 const useRefs = args.get('refs') === 'true';
 const mediaArg = (args.get('media') ?? 'low').toUpperCase();
@@ -49,11 +50,16 @@ for (const spec of (args.get('extra') ?? '').split(',').filter(Boolean)) {
 const negDir = args.get('negatives');
 if (negDir) for (const f of readdirSync(resolve(negDir)).filter((x) => x.endsWith('.jpg')).sort()) frames.push({ id: 100 + frames.length, truth: 'none' as LidState, jpeg: readFileSync(resolve(negDir, f)) });
 
+let lastStart = 0;
 async function runPool<T, R>(items: T[], n: number, fn: (t: T) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length);
   let next = 0;
   await Promise.all(Array.from({ length: n }, async () => {
-    while (next < items.length) { const i = next++; out[i] = await fn(items[i]); }
+    while (next < items.length) {
+      const i = next++;
+      if (paceMs) { const wait = lastStart + paceMs - Date.now(); if (wait > 0) await new Promise((r) => setTimeout(r, wait)); lastStart = Date.now(); }
+      out[i] = await fn(items[i]);
+    }
   }));
   return out;
 }

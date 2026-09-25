@@ -75,6 +75,9 @@ or by telling the assistant "use this as the closed reference".
 * Other vendors with OpenAI-compatible endpoints work by prefixing the model name
   (`groq/…`, `fireworks/…`, `together/…`, `xai/…`, `cerebras/…`, `openrouter/…`, `ollama/…`) and
   putting the matching `*_API_KEY` in `.env` — see `COMPAT_ENDPOINTS` in `server/src/vision.ts`.
+  `moondream` uses Moondream's own query API (`MOONDREAM_API_KEY`). Measured results for all of
+  them are in `NOTES.md`; the default stays `gpt-5.4-mini` because it was the only one that read
+  every unambiguous frame correctly.
 * Transitions need `confirmations` agreeing verdicts (default 2), or one verdict at ≥0.9 confidence.
 * The countdown deadline is `first closed frame + 10 s`; the glasses animate it locally from a
   server-clock offset, so the ring is smooth and nothing waits on the network.

@@ -5,7 +5,7 @@
 import { RealtimeSession } from './realtime.ts';
 
 export type LidState = 'open' | 'closed' | 'partial' | 'unknown';
-export type Provider = 'gemini' | 'openai' | 'openai-realtime' | 'compat';
+export type Provider = 'gemini' | 'openai' | 'openai-realtime' | 'compat' | 'moondream';
 
 export interface Verdict {
   press_visible: boolean;
@@ -67,17 +67,18 @@ const GEMINI_SCHEMA = {
  * OpenAI-compatible chat/completions endpoints, selected by a "vendor/" prefix on the model name,
  * e.g. "groq/meta-llama/llama-4-scout-17b-16e-instruct". Set the matching *_API_KEY in .env.
  */
-export const COMPAT_ENDPOINTS: Record<string, { base: string; key: string }> = {
+export const COMPAT_ENDPOINTS: Record<string, { base: string; key: string; altKey?: string }> = {
   groq: { base: 'https://api.groq.com/openai/v1', key: 'GROQ_API_KEY' },
   fireworks: { base: 'https://api.fireworks.ai/inference/v1', key: 'FIREWORKS_API_KEY' },
   together: { base: 'https://api.together.xyz/v1', key: 'TOGETHER_API_KEY' },
-  xai: { base: 'https://api.x.ai/v1', key: 'XAI_API_KEY' },
+  xai: { base: 'https://api.x.ai/v1', key: 'XAI_API_KEY', altKey: 'GROK_API_KEY' },
   cerebras: { base: 'https://api.cerebras.ai/v1', key: 'CEREBRAS_API_KEY' },
   openrouter: { base: 'https://openrouter.ai/api/v1', key: 'OPENROUTER_API_KEY' },
   ollama: { base: 'http://localhost:11434/v1', key: '' },
 };
 
 export function providerFor(model: string): Provider {
+  if (/^moondream/i.test(model)) return 'moondream';
   if (/^gpt-realtime/i.test(model)) return 'openai-realtime';
   if (model.includes('/') && COMPAT_ENDPOINTS[model.split('/')[0]]) return 'compat';
   return /^(gemini|gemma|nano-banana)/i.test(model) ? 'gemini' : 'openai';
@@ -85,6 +86,11 @@ export function providerFor(model: string): Provider {
 
 /** Curated candidates, fastest-first guesses; the benchmark re-ranks them empirically. */
 export const CANDIDATE_MODELS = [
+  'gpt-5.4-mini',
+  'moondream',
+  'xai/grok-4.20-0309-non-reasoning',
+  'groq/qwen/qwen3.8-27b',
+  'cerebras/qwen-3.8-27b',
   'gpt-realtime-mini',
   'gemini-3.1-flash-lite',
   'gemini-3.5-flash-lite',
@@ -271,7 +277,7 @@ async function classifyCompat(model: string, jpeg: Buffer, opts: ClassifyOptions
   const vendor = model.split('/')[0];
   const name = model.slice(vendor.length + 1);
   const ep = COMPAT_ENDPOINTS[vendor];
-  const key = ep.key ? process.env[ep.key] : '';
+  const key = ep.key ? (process.env[ep.key] || (ep.altKey ? process.env[ep.altKey] : '')) : '';
   if (ep.key && !key) throw new Error(`${ep.key} missing`);
   const content: unknown[] = [{ type: 'text', text: (opts.prompt ?? DEFAULT_PROMPT) + '\nRespond with a JSON object with keys press_visible, lid, confidence.' }];
   for (const r of opts.refs ?? []) {
@@ -297,6 +303,26 @@ async function classifyCompat(model: string, jpeg: Buffer, opts: ClassifyOptions
   }
 }
 
+// --------------------------- Moondream (single-image VQA) --------------------
+export const MOONDREAM_QUESTION = `Is there a white rectangular object on the dark table: either an open white case with its lid raised (inside visible), or a closed flat white box (a solid white block)? Answer with one word: none, open, or closed.`;
+async function classifyMoondream(model: string, jpeg: Buffer, opts: ClassifyOptions): Promise<ClassifyResult> {
+  const key = process.env.MOONDREAM_API_KEY;
+  if (!key) throw new Error('MOONDREAM_API_KEY missing');
+  const t0 = performance.now();
+  const res = await fetch('https://api.moondream.ai/v1/query', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'X-Moondream-Auth': key },
+    body: JSON.stringify({ image_url: `data:image/jpeg;base64,${jpeg.toString('base64')}`, question: MOONDREAM_QUESTION, stream: false, reasoning: false }),
+    signal: withTimeout(opts.signal, opts.timeoutMs ?? 20_000),
+  });
+  const text = await res.text();
+  if (!res.ok) return { model, provider: 'moondream', verdict: null, latency_ms: performance.now() - t0, error: `HTTP ${res.status}: ${text.slice(0, 300)}` };
+  const answer = String(JSON.parse(text).answer ?? '').toLowerCase();
+  const word = (answer.match(/\b(none|open|closed|partial|partially)\b/) ?? [])[1] ?? '';
+  const lid: LidState = word === 'open' ? 'open' : word === 'closed' ? 'closed' : word.startsWith('partial') ? 'partial' : 'unknown';
+  return { model, provider: 'moondream', verdict: { press_visible: lid !== 'unknown', lid, confidence: word ? 0.8 : 0.3 }, latency_ms: performance.now() - t0, raw: answer };
+}
+
 /** Close persistent sessions so short-lived tools (benchmarks) can exit. */
 export function closeSessions(): void {
   for (const s of realtimeSessions.values()) s.close();
@@ -310,6 +336,7 @@ export async function classifyFrame(model: string, jpeg: Buffer, opts: ClassifyO
       case 'gemini': return await classifyGemini(model, jpeg, opts);
       case 'openai-realtime': return await classifyRealtime(model, jpeg, opts);
       case 'compat': return await classifyCompat(model, jpeg, opts);
+      case 'moondream': return await classifyMoondream(model, jpeg, opts);
       default: return await classifyOpenAI(model, jpeg, opts);
     }
   } catch (e) {

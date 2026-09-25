@@ -33,8 +33,14 @@ export interface DetectorStats {
   per_model: Record<string, { wins: number; p50_ms: number; errors: number }>;
 }
 
+/** Minimum spacing between requests to rate-limited APIs (ms), and cool-down after a 429. */
+const MODEL_PACE_MS: Record<string, number> = { moondream: 400 };
+const COOL_DOWN_MS = 3000;
+
 export class Detector {
   config: DetectorConfig;
+  private lastStartByModel = new Map<string, number>();
+  private coolDownUntil = new Map<string, number>();
   private latest: Frame | null = null;
   private lastSubmittedSeq = -1;
   private lastSubmittedRecvTs = -1;
@@ -92,14 +98,19 @@ export class Detector {
     const ac = new AbortController();
     const models = this.config.models.length ? this.config.models : ['gemini-3.1-flash-lite'];
     try {
-      const attempt = (m: string) =>
-        classifyFrame(m, frame.jpeg, { prompt: this.config.prompt, signal: ac.signal, timeoutMs: this.config.timeoutMs, refs: this.config.refs }).then((r) => {
-          if (!r.verdict) {
-            if (r.error !== 'aborted') { const pm = this.perModel.get(m) ?? { wins: 0, lat: [], errors: 0 }; pm.errors++; this.perModel.set(m, pm); }
-            throw new Error(`${m}: ${r.error ?? 'no verdict'}`);
-          }
-          return r as ClassifyResult & { verdict: Verdict };
-        });
+      const attempt = async (m: string) => {
+        const now = Date.now();
+        if ((this.coolDownUntil.get(m) ?? 0) > now) throw new Error(`${m}: cooling down after rate limit`);
+        const pace = MODEL_PACE_MS[m.split('/')[0]] ?? 0;
+        if (pace) { const wait = (this.lastStartByModel.get(m) ?? 0) + pace - now; if (wait > 0) await new Promise((r) => setTimeout(r, wait)); this.lastStartByModel.set(m, Date.now()); }
+        const r = await classifyFrame(m, frame.jpeg, { prompt: this.config.prompt, signal: ac.signal, timeoutMs: this.config.timeoutMs, refs: this.config.refs });
+        if (!r.verdict) {
+          if (r.error !== 'aborted') { const pm = this.perModel.get(m) ?? { wins: 0, lat: [], errors: 0 }; pm.errors++; this.perModel.set(m, pm); }
+          if (/429|too many|quota/i.test(r.error ?? '')) this.coolDownUntil.set(m, Date.now() + COOL_DOWN_MS);
+          throw new Error(`${m}: ${r.error ?? 'no verdict'}`);
+        }
+        return r as ClassifyResult & { verdict: Verdict };
+      };
       let winner: ClassifyResult & { verdict: Verdict };
       if ((this.config.mode ?? 'primary') === 'race' || models.length === 1) {
         winner = await Promise.any(models.map(attempt));
