@@ -25,14 +25,15 @@ class MainActivity : ComponentActivity() {
 
     private val permissions = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
         if (granted[Manifest.permission.CAMERA] == true) startCamera()
+        if (granted[Manifest.permission.RECORD_AUDIO] == true) model.startListening()
     }
 
-    // Rokid temple button: tap = talk to the assistant, double tap = start / restart the workflow,
-    // long press (when the system lets it through) = spoken prompts on/off.
+    // Rokid temple button: tap = microphone mute/unmute (it listens all the time otherwise),
+    // double tap = start / restart the workflow, long press (when the system lets it through) = spoken prompts on/off.
     private val gestures = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.action) {
-                ACTION_CLICK -> model.talk()
+                ACTION_CLICK -> model.toggleMic()
                 ACTION_DOUBLE_CLICK -> model.gesture("restart")
                 ACTION_LONG_PRESS -> model.toggleVoice()
             }
@@ -72,6 +73,7 @@ class MainActivity : ComponentActivity() {
         val needed = listOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
             .filter { ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED }
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) startCamera()
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) model.startListening()
         if (needed.isNotEmpty()) permissions.launch(needed.toTypedArray())
     }
 
@@ -104,7 +106,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean = when (keyCode) {
-        KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_DPAD_CENTER -> { model.talk(); true }
+        KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_DPAD_CENTER -> { model.toggleMic(); true }
         else -> super.onKeyDown(keyCode, event)
     }
 

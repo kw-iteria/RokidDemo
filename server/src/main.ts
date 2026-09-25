@@ -196,30 +196,34 @@ const agent = new Agent({ fast: config.chatFast, vision: config.chatVision }, ()
   set_models: (models) => { const ok = models.filter((m) => typeof m === 'string' && m.trim()); if (!ok.length) return 'no models given'; applyCommand({ cmd: 'set', config: { models: ok } }, 'chat'); return `models set to ${config.models.join(' + ')}`; },
   set_reference: (kind) => { if (!latestFrame) return 'no live frame to capture'; applyCommand({ cmd: 'set_reference', kind }, 'chat'); return `saved the current frame as the "${kind}" reference`; },
 });
-let chatBusy = false;
+let chatInflight: AbortController | null = null;
 async function handleChat(text: string, from: string): Promise<void> {
   const clean = text.trim();
   if (!clean) return;
   const user: ChatMessage = { id: `u${Date.now()}`, role: 'user', text: clean, at: Date.now(), from };
   broadcast(JSON.stringify({ t: 'chat', ...user }));
-  if (chatBusy) { broadcast(JSON.stringify({ t: 'chat', id: `a${Date.now()}`, role: 'assistant', text: 'One moment, still answering the previous message.', at: Date.now() })); return; }
-  chatBusy = true;
+  if (chatInflight) { log('warn', 'chat: cancelling the previous reply, a new message arrived'); chatInflight.abort(); }
+  const ac = new AbortController();
+  chatInflight = ac;
   broadcast(JSON.stringify({ t: 'chat.thinking', on: true }));
+  const t0 = Date.now();
   try {
     const reply = await agent.chat(
       clean, from,
       (id, delta) => broadcast(JSON.stringify({ t: 'chat.delta', id, delta })),
       (e) => { if (e.type === 'tool') log('info', `agent tool ${e.name}: ${e.result}`); else log('info', `chat model ${e.model}${e.vision ? ' (with camera frame)' : ''}`); },
+      ac.signal,
     );
+    if (ac.signal.aborted) return;
     broadcast(JSON.stringify({ t: 'chat', ...reply }));
-    log('info', `chat (${from}, ${reply.model}, ${reply.ms} ms): "${clean.slice(0, 80)}" → "${reply.text.slice(0, 100)}"`);
+    log('info', `chat (${from}, ${reply.model}, ${Date.now() - t0} ms): "${clean.slice(0, 80)}" → "${reply.text.slice(0, 100)}"`);
   } catch (e) {
+    if (ac.signal.aborted) return;
     const msg = (e as Error).message;
-    log('error', `chat failed: ${msg}`);
+    log('error', `chat failed after ${Date.now() - t0} ms: ${msg}`);
     broadcast(JSON.stringify({ t: 'chat', id: `a${Date.now()}`, role: 'assistant', text: `Sorry, the assistant failed: ${msg.slice(0, 120)}`, at: Date.now() }));
   } finally {
-    chatBusy = false;
-    broadcast(JSON.stringify({ t: 'chat.thinking', on: false }));
+    if (chatInflight === ac) { chatInflight = null; broadcast(JSON.stringify({ t: 'chat.thinking', on: false })); }
     broadcastState();
   }
 }
@@ -404,7 +408,7 @@ wss.on('connection', (ws, req) => {
 
 server.listen(PORT, () => {
   const hosts = lanAddresses();
-  console.log(`PlatePress server  http://localhost:${PORT}   (LAN: ${hosts.map((h) => `http://${h}:${PORT}`).join(', ') || 'none'})`);
+  console.log(`Iteria Agent  http://localhost:${PORT}   (LAN: ${hosts.map((h) => `http://${h}:${PORT}`).join(', ') || 'none'})`);
   console.log(`models: ${config.models.join(' + ')}   glasses ws: ws://<host>:${PORT}/ws/glasses`);
   startBeacon(PORT);
 });

@@ -123,3 +123,12 @@ button[aria-pressed="true"] { border-color: rgba(140,207,255,0.5); color: var(--
 .refs { align-items: center; }
 .refs figure { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 11.5px; color: var(--muted); }
 .refs img { height: 54px; border-radius: 6px; border: 1px solid var(--line); background: #000; }
+
+/* thinking bubble: three shimmering dots */
+.chat-log li.thinking { display: inline-flex; gap: 6px; align-items: center; padding: 12px 14px; }
+.chat-log li.thinking i { width: 7px; height: 7px; border-radius: 50%; background: var(--ice); opacity: 0.25; animation: shimmer 0.9s ease-in-out infinite; }
+.chat-log li.thinking i:nth-child(2) { animation-delay: 0.15s; }
+.chat-log li.thinking i:nth-child(3) { animation-delay: 0.3s; }
+.chat-log li.thinking small { margin-left: 8px; }
+@keyframes shimmer { 0%, 100% { opacity: 0.2; transform: translateY(0); } 50% { opacity: 1; transform: translateY(-2px); } }
+.chat-log li.streaming::after { content: "▍"; color: var(--ice); animation: pulse 0.8s ease-in-out infinite; }

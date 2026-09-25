@@ -12,7 +12,7 @@
     prompt: $('prompt'), promptBox: $('prompt-box'),
     camRot: $('cam-rot'), camMirror: $('cam-mirror'), camAspect: $('cam-aspect'), camEdge: $('cam-edge'), camFps: $('cam-fps'),
     chatFast: $('chat-fast'), chatVision: $('chat-vision'),
-    chatLog: $('chat-log'), chatForm: $('chat-form'), chatInput: $('chat-input'), chatThinking: $('chat-thinking'), mic: $('btn-mic'), hudChat: $('hud-chat'),
+    chatLog: $('chat-log'), chatForm: $('chat-form'), chatInput: $('chat-input'), mic: $('btn-mic'), hudChat: $('hud-chat'),
   };
   const state = { snap: null, offset: 0, verdicts: [], lastFrameUrl: null, sound: true, voice: false, lastPhase: null, lastBeep: 0, defaultPrompt: '', bench: null, editing: false };
 
@@ -32,7 +32,7 @@
       else if (msg.t === 'chat') addChat(msg, true);
       else if (msg.t === 'chat.delta') addDelta(msg);
       else if (msg.t === 'chat.history') { els.chatLog.querySelectorAll('li:not(.hint)').forEach((n) => n.remove()); for (const m of msg.messages) addChat(m, false); }
-      else if (msg.t === 'chat.thinking') { els.chatThinking.hidden = !msg.on; els.chatThinking.textContent = msg.stt ? 'listening…' : 'thinking…'; }
+      else if (msg.t === 'chat.thinking') { if (msg.on) showThinking(msg.stt ? 'transcribing' : ''); else if (!document.querySelector('.chat-log li.streaming')) hideThinking(); }
     };
   }
   function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
@@ -240,16 +240,26 @@
     el.addEventListener('blur', () => (state.editing = false));
     el.addEventListener('change', () => cmd({ cmd: 'set', config: { chatFast: els.chatFast.value, chatVision: els.chatVision.value } }));
   }
+  function showThinking(label) {
+    let li = document.getElementById('chat-thinking-bubble');
+    if (!li) { li = document.createElement('li'); li.id = 'chat-thinking-bubble'; li.className = 'assistant thinking'; li.innerHTML = '<i></i><i></i><i></i><small></small>'; els.chatLog.appendChild(li); }
+    li.querySelector('small').textContent = label || '';
+    els.chatLog.appendChild(li); // keep it last
+    els.chatLog.scrollTop = els.chatLog.scrollHeight;
+  }
+  function hideThinking() { const li = document.getElementById('chat-thinking-bubble'); if (li) li.remove(); }
   function addDelta(m) {
+    hideThinking();
     let li = document.getElementById(`chat-${m.id}`);
     if (!li) {
       li = document.createElement('li'); li.className = 'assistant streaming'; li.id = `chat-${m.id}`; li.textContent = '';
-      els.chatLog.appendChild(li); els.chatThinking.hidden = true;
+      els.chatLog.appendChild(li);
     }
     li.textContent += m.delta;
     els.chatLog.scrollTop = els.chatLog.scrollHeight;
   }
   function addChat(m, fresh) {
+    if (m.role === 'assistant') hideThinking();
     let li = document.getElementById(`chat-${m.id}`);
     if (li) { li.classList.remove('streaming'); li.textContent = m.text; }
     else { li = document.createElement('li'); li.className = m.role; li.id = `chat-${m.id}`; li.textContent = m.text; }
@@ -257,6 +267,7 @@
     small.textContent = `${new Date(m.at).toLocaleTimeString([], { hour12: false })}${m.from && m.role === 'user' ? ` · from ${m.from}` : ''}${m.model ? ` · ${m.model}${m.ms ? ` · ${m.ms} ms` : ''}` : ''}`;
     li.appendChild(small);
     if (!li.parentNode) els.chatLog.appendChild(li);
+    if (m.role === 'user' && fresh) showThinking('');
     els.chatLog.scrollTop = els.chatLog.scrollHeight;
     if (m.role === 'assistant' && fresh) { state.hudChat = { text: m.text, at: Date.now() }; say(m.text); }
   }
@@ -266,6 +277,7 @@
     if (!text) return;
     send({ t: 'chat', text });
     els.chatInput.value = '';
+    showThinking('');
   });
   // Voice at the Mac: browser speech recognition, one utterance per click.
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -275,7 +287,7 @@
     if (rec) { rec.stop(); return; }
     rec = new SR(); rec.lang = 'en-US'; rec.interimResults = true; rec.continuous = false;
     els.mic.setAttribute('aria-pressed', 'true'); els.mic.textContent = 'Listening';
-    rec.onresult = (ev) => { let t = ''; for (const r of ev.results) t += r[0].transcript; els.chatInput.value = t; if (ev.results[ev.results.length - 1].isFinal) { send({ t: 'chat', text: t.trim() }); els.chatInput.value = ''; } };
+    rec.onresult = (ev) => { let t = ''; for (const r of ev.results) t += r[0].transcript; els.chatInput.value = t; if (ev.results[ev.results.length - 1].isFinal) { send({ t: 'chat', text: t.trim() }); els.chatInput.value = ''; showThinking(''); } };
     rec.onend = () => { rec = null; els.mic.setAttribute('aria-pressed', 'false'); els.mic.textContent = 'Mic'; };
     rec.onerror = () => { rec = null; els.mic.setAttribute('aria-pressed', 'false'); els.mic.textContent = 'Mic'; };
     rec.start();

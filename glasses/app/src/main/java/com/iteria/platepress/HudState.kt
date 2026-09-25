@@ -22,8 +22,12 @@ data class HudState(
     val cameraLive: Boolean = false,
     val chatText: String = "",
     val chatAt: Long = 0L,
-    val listening: Boolean = false,
-    val thinking: Boolean = false,
+    val chatStreaming: String = "",   // assistant reply while it streams in
+    val heardText: String = "",       // what speech-to-text understood
+    val heardAt: Long = 0L,
+    val listening: Boolean = false,   // microphone armed (always-on mode)
+    val speaking: Boolean = false,    // operator is talking right now
+    val thinking: Boolean = false,    // waiting for the assistant
 ) {
     companion object {
         fun fromServer(json: JSONObject, prev: HudState): HudState {

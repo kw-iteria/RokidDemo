@@ -56,7 +56,7 @@ class ServerLink(
                             val rtt = System.currentTimeMillis() - j.getLong("ts")
                             clockOffset = j.getLong("server_now") + rtt / 2 - System.currentTimeMillis()
                         }
-                        "chat", "chat.thinking", "camera" -> onEvent(j)
+                        "chat", "chat.delta", "chat.thinking", "camera" -> onEvent(j)
                     }
                 } catch (e: Exception) {
                     Log.w(TAG, "bad message: ${e.message}")

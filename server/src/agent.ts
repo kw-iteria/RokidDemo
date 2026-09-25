@@ -48,10 +48,23 @@ const INSTRUCTIONS = `You are the Iteria assistant: a general-purpose, friendly 
 Answer anything: general knowledge, science, lab questions, math, small talk, translations, advice. Be accurate; say when you are unsure.
 The workflow you run: find the plate press, ask the operator to close it, count down while it is closed, then ask them to open it, then report completion. The workflow runs by itself on the server; you only start or stop it.
 The plate press in this lab looks like a small white / silver rectangular case with a hinged lid (about the size of a glasses case). When you see that white box, that IS the plate press; call it "the press". Reference photos of it (open and closed) may be attached before the live frame.
-Tools: when the operator asks to start, begin, run, or do the workflow (any wording), call start_workflow. "Stop", "cancel", "standby" → stop_workflow. Change timing or settings with the matching tool. Never claim a tool ran unless you called it.
+Tools: when the operator asks to start, begin, run, or do the workflow (any wording, even if it seems to be running already), call start_workflow. "Stop", "cancel", "standby" → stop_workflow. Change timing or settings with the matching tool. Never claim a tool ran unless you called it, and never answer "already running" instead of calling it.
 After a tool call you receive its result; then answer with ONE short sentence that states that result only (for example "Workflow started, looking for the press."). Never narrate, simulate or predict the following steps, countdowns or detections; the operator is guided by the glasses display.
 Style: replies are read aloud in the glasses, so keep them short (one to three sentences) unless the operator asks for detail, a list, or an explanation; then answer fully. Plain text only: no markdown, no bold, no headings; simple numbered lists are fine on request.
 When asked what you see, describe the attached camera frame plainly and say whether the press is visible and open or closed. If no frame is attached or the camera is not live, say the camera is not live.`;
+
+/**
+ * Deterministic intents for the critical commands, tolerant to speech-to-text spellings
+ * ("play press", "plate-press", "playpress", "press workflow", just "the workflow").
+ */
+export function commandIntent(text: string): 'start' | 'stop' | null {
+  const t = text.toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const mentionsWorkflow = /\b(plate ?press|play ?press|plait ?press|press|workflow|work flow|countdown|detection)\b/.test(t);
+  if (!mentionsWorkflow) return null;
+  if (/\b(stop|cancel|abort|end|halt|standby|stand by|pause)\b/.test(t)) return 'stop';
+  if (/\b(start|begin|run|launch|restart|kick off|go ahead|initiate|resume)\b/.test(t)) return 'start';
+  return null;
+}
 
 /** Does this message need the camera picture (vision model) rather than just text? */
 export function needsVision(text: string): boolean {
@@ -108,11 +121,26 @@ export class Agent {
     from = 'console',
     onDelta: (id: string, delta: string) => void = () => {},
     onEvent: (e: { type: 'tool'; name: string; result: string } | { type: 'model'; model: string; vision: boolean }) => void = () => {},
+    signal?: AbortSignal,
   ): Promise<ChatMessage> {
     const user: ChatMessage = { id: `m${++this.seq}`, role: 'user', text: userText, at: Date.now(), from };
     this.history.push(user);
     const replyId = `m${++this.seq}`;
     const ctx = this.getContext();
+
+    // Critical commands never depend on the model: run the tool, confirm in a fixed sentence.
+    const intent = commandIntent(userText);
+    if (intent) {
+      const result = intent === 'start' ? this.tools.start_workflow() : this.tools.stop_workflow();
+      onEvent({ type: 'tool', name: intent === 'start' ? 'start_workflow' : 'stop_workflow', result });
+      const text = intent === 'start'
+        ? (result.includes('no camera') ? 'Workflow started, but no camera is live yet.' : 'Workflow started. Looking for the press.')
+        : 'Workflow stopped. Standing by.';
+      onDelta(replyId, text);
+      const reply: ChatMessage = { id: replyId, role: 'assistant', text, at: Date.now(), model: 'command', ms: 0 };
+      this.history.push(reply);
+      return reply;
+    }
     const vision = needsVision(userText) && Boolean(ctx.frame);
     const model = vision ? this.models.vision : this.models.fast;
     onEvent({ type: 'model', model, vision });
@@ -136,12 +164,14 @@ export class Agent {
     for (let round = 0; round < 4; round++) {
       let r;
       try {
-        r = await streamChat(model, messages, { tools: TOOL_DEFS, maxTokens: 900, onDelta: (d) => { text += d; onDelta(replyId, d); } });
+        r = await streamChat(model, messages, { tools: TOOL_DEFS, maxTokens: 900, timeoutMs: 15_000, signal, onDelta: (d) => { text += d; onDelta(replyId, d); } });
       } catch (e) {
+        if (signal?.aborted) throw e;
         // fall back to the vision model (OpenAI) if the fast vendor fails
         if (model !== this.models.vision) {
           usedModel = this.models.vision;
-          r = await streamChat(this.models.vision, messages, { tools: TOOL_DEFS, maxTokens: 900, onDelta: (d) => { text += d; onDelta(replyId, d); } });
+          text = '';
+          r = await streamChat(this.models.vision, messages, { tools: TOOL_DEFS, maxTokens: 900, timeoutMs: 20_000, signal, onDelta: (d) => { text += d; onDelta(replyId, d); } });
         } else throw e;
       }
       if (!r.toolCalls.length) break;

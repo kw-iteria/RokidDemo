@@ -1,4 +1,4 @@
-# PlatePress — a Rokid glasses guide for the plate-press motion
+# Iteria Agent — Rokid glasses assistant and plate-press guide
 
 Look at the press through Rokid RV101 glasses. The glasses stream what you see to a small
 server on your Mac, a vision model reads the state of the press, and both the glasses HUD and a
@@ -12,10 +12,13 @@ desktop console walk you through the motion:
 4. **Plate press motion completed** — check mark, done. It returns to standby after 12 s.
 
 **Talking to the assistant.** The console has a chat panel with a microphone button; on the glasses
-(the app is called **Iteria**), tap the temple button, speak, and the reply is shown and read aloud.
+(the app is called **Iteria**) the microphone is always on: just speak, like a regular chat. A
+shimmering bubble appears the moment your words are captured, the reply streams in, and it is read
+aloud. Tap the temple button to mute or unmute the microphone.
 It is a general chatbot that also runs the workflow: start/stop it, change the press time, pick
 models, save the current view as a reference photo, or just ask anything. Double-tap the temple
-button to start or restart without talking.
+button to start or restart without talking. "Start / stop the workflow" in any wording (even
+"play press") is handled deterministically, without waiting for a model.
 
 Two chat models, chosen per message: plain conversation and commands go to a fast text model
 (default `groq/qwen/qwen3.8-27b`, ~0.2–0.5 s per reply including tool calls); questions about

@@ -104,19 +104,17 @@ private fun Subtitle(state: HudState, u: Dp, modifier: Modifier) {
     val pulse by rememberInfiniteTransition(label = "alarm").animateFloat(1f, 0.25f, infiniteRepeatable(tween(450, easing = LinearEasing), RepeatMode.Reverse), label = "a")
     val breathe by rememberInfiniteTransition(label = "breathe").animateFloat(0.35f, 1f, infiniteRepeatable(tween(1400), RepeatMode.Reverse), label = "b")
     val chatFresh = state.chatText.isNotBlank() && System.currentTimeMillis() - state.chatAt < 12_000
+    val heardFresh = state.heardText.isNotBlank() && System.currentTimeMillis() - state.heardAt < 6_000
     Column(modifier.fillMaxWidth().padding(bottom = u * 0.11f), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Bottom) {
+        if (heardFresh && (state.thinking || state.chatStreaming.isNotEmpty())) {
+            Line("\u201c${state.heardText}\u201d", u, 0.036f, color = Dim, weight = FontWeight.Normal)
+            Spacer(Modifier.height(u * 0.012f))
+        }
         when {
-            state.listening -> Line("Listening…", u, 0.045f, color = Dim.copy(alpha = 0.3f + 0.6f * breathe), weight = FontWeight.Normal)
-            state.thinking -> Line("…", u, 0.06f, color = Dim, weight = FontWeight.Normal)
-            chatFresh -> Text(
-                text = state.chatText,
-                color = Ink,
-                style = TextStyle(fontSize = sp(u * 0.042f), lineHeight = sp(u * 0.052f), textAlign = TextAlign.Center),
-                modifier = Modifier
-                    .padding(horizontal = u * 0.06f)
-                    .border(1.dp, Dim, RoundedCornerShape(u * 0.025f))
-                    .padding(horizontal = u * 0.035f, vertical = u * 0.018f),
-            )
+            state.speaking -> Line("Listening…", u, 0.04f, color = Dim.copy(alpha = 0.3f + 0.6f * breathe), weight = FontWeight.Normal)
+            state.chatStreaming.isNotEmpty() -> Bubble(state.chatStreaming, u)
+            state.thinking -> ThinkingBubble(u)
+            chatFresh -> Bubble(state.chatText, u)
         }
         Spacer(Modifier.height(u * 0.02f))
         when (state.phase) {
@@ -141,6 +139,37 @@ private fun Subtitle(state: HudState, u: Dp, modifier: Modifier) {
                 Line(state.message, u, 0.056f)
                 Line(state.hint.ifBlank { state.sub }, u, 0.036f, color = Dim, weight = FontWeight.Normal)
             }
+        }
+    }
+}
+
+@Composable
+private fun Bubble(text: String, u: Dp) {
+    Text(
+        text = text,
+        color = Ink,
+        maxLines = 5,
+        style = TextStyle(fontSize = sp(u * 0.042f), lineHeight = sp(u * 0.052f), textAlign = TextAlign.Center),
+        modifier = Modifier
+            .padding(horizontal = u * 0.06f)
+            .border(1.dp, Dim, RoundedCornerShape(u * 0.025f))
+            .padding(horizontal = u * 0.035f, vertical = u * 0.018f),
+    )
+}
+
+/** Three dots that shimmer in sequence while the assistant is working. */
+@Composable
+private fun ThinkingBubble(u: Dp) {
+    val phase by rememberInfiniteTransition(label = "dots").animateFloat(0f, 3f, infiniteRepeatable(tween(900, easing = LinearEasing)), label = "p")
+    Row(
+        Modifier.border(1.dp, Dim, RoundedCornerShape(u * 0.025f)).padding(horizontal = u * 0.045f, vertical = u * 0.03f),
+        horizontalArrangement = Arrangement.spacedBy(u * 0.022f),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        for (i in 0 until 3) {
+            val d = kotlin.math.abs(((phase - i + 3f) % 3f) - 1.5f)   // 0 = lit, 1.5 = dim
+            val a = (1f - d / 1.5f).coerceIn(0.15f, 1f)
+            Canvas(Modifier.size(u * 0.022f)) { drawCircle(Ink.copy(alpha = a)) }
         }
     }
 }
@@ -223,9 +252,11 @@ private fun Foot(state: HudState, fps: Float, u: Dp, modifier: Modifier) {
         Text(left, color = Dim, style = TextStyle(fontSize = sp(u * 0.032f)))
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (!state.voice) {
-                Text("muted", color = Faint, style = TextStyle(fontSize = sp(u * 0.032f)))
+                Text("silent", color = Faint, style = TextStyle(fontSize = sp(u * 0.032f)))
                 Spacer(Modifier.width(u * 0.02f))
             }
+            Text(if (state.listening) "mic" else "mic off", color = if (state.listening) Dim else Faint, style = TextStyle(fontSize = sp(u * 0.032f)))
+            Spacer(Modifier.width(u * 0.02f))
             Canvas(Modifier.size(u * 0.02f)) { drawCircle(if (state.connected) Ink else Faint) }
             Spacer(Modifier.width(u * 0.015f))
             Text(if (state.connected) "${"%.0f".format(fps)} fps" else "offline", color = Dim, style = TextStyle(fontSize = sp(u * 0.032f)))

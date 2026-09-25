@@ -27,9 +27,12 @@ class Sounds(context: Context) {
     fun alarmBeep() { tone?.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 260) }
     fun done() { tone?.startTone(ToneGenerator.TONE_PROP_PROMPT, 320) }
 
+    @Volatile private var lastSpokeAt = 0L
     fun say(text: String) {
-        if (voiceEnabled && ttsReady) tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "pp-${System.nanoTime()}")
+        if (voiceEnabled && ttsReady) { lastSpokeAt = System.currentTimeMillis(); tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "pp-${System.nanoTime()}") }
     }
+    /** True while the speaker is (probably) playing our own voice, so the microphone ignores it. */
+    fun isSpeaking(): Boolean = try { ttsReady && (tts.isSpeaking || System.currentTimeMillis() - lastSpokeAt < 400) } catch (_: Exception) { false }
 
     fun release() {
         tone?.release()

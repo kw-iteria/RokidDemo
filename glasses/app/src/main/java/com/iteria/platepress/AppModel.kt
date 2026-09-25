@@ -30,9 +30,12 @@ class AppModel(context: Context) {
         onConnection = { up, endpoint -> _state.update { it.copy(connected = up, host = endpoint, phase = if (up) it.phase else "CONNECTING") } },
         onEvent = ::onServerEvent,
     )
-    private val talk = PushToTalk(
-        onAudio = { pcm, rate -> link.sendAudio(pcm, rate); _state.update { it.copy(thinking = true) } },
-        onState = { rec -> _state.update { it.copy(listening = rec) }; if (rec) sounds.tick() },
+    private val listener = Listener(
+        onUtterance = { pcm, rate ->
+            if (link.connected) { link.sendAudio(pcm, rate); _state.update { it.copy(thinking = true, chatStreaming = "", heardText = "") } }
+        },
+        onSpeech = { speaking -> _state.update { it.copy(speaking = speaking) } },
+        isSpeakerBusy = { sounds.isSpeaking() },
     )
     private var lastPhase = ""
     private var alarmJob: Job? = null
@@ -87,20 +90,31 @@ class AppModel(context: Context) {
 
     private fun onServerEvent(j: JSONObject) {
         when (j.optString("t")) {
-            "chat" -> if (j.optString("role") == "assistant") {
-                val text = j.optString("text")
-                _state.update { it.copy(chatText = text, chatAt = System.currentTimeMillis(), thinking = false) }
-                sounds.say(text)
+            "chat" -> when (j.optString("role")) {
+                "assistant" -> {
+                    val text = j.optString("text")
+                    _state.update { it.copy(chatText = text, chatAt = System.currentTimeMillis(), chatStreaming = "", thinking = false) }
+                    sounds.say(text)
+                }
+                "user" -> if (j.optString("from").startsWith("glasses")) _state.update { it.copy(heardText = j.optString("text"), heardAt = System.currentTimeMillis(), thinking = true) }
             }
-            "chat.thinking" -> _state.update { it.copy(thinking = j.optBoolean("on")) }
+            "chat.delta" -> _state.update { it.copy(chatStreaming = it.chatStreaming + j.optString("delta"), thinking = true) }
+            "chat.thinking" -> _state.update { it.copy(thinking = j.optBoolean("on") || it.chatStreaming.isNotEmpty()) }
             "camera" -> applyCamera(j)
         }
     }
 
-    /** Temple tap: record one utterance and send it to the assistant. */
-    fun talk() {
-        if (!link.connected) { sounds.tick(); return }
-        talk.toggle()
+    /** Start the always-on microphone (after the permission is granted). */
+    fun startListening() {
+        listener.start()
+        _state.update { it.copy(listening = listener.enabled) }
+    }
+
+    /** Temple tap: mute / unmute the microphone. */
+    fun toggleMic() {
+        listener.enabled = !listener.enabled
+        _state.update { it.copy(listening = listener.enabled) }
+        if (listener.enabled) sounds.tick() else sounds.chime()
     }
 
     private fun onPhaseChange(to: String) {
@@ -133,7 +147,7 @@ class AppModel(context: Context) {
     }
 
     fun close() {
-        talk.stop()
+        listener.shutdown()
         stopAlarm()
         scope.cancel()
         link.close()
