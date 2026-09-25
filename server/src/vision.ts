@@ -1,0 +1,234 @@
+// Vision-LLM frame classifier. One JPEG in, one tiny structured verdict out.
+// Speaks raw REST to Gemini (generateContent) and OpenAI (Responses API) so there is
+// no SDK overhead, and remembers per-model which "no thinking" knob each API accepts.
+
+export type LidState = 'open' | 'closed' | 'partial' | 'unknown';
+export type Provider = 'gemini' | 'openai';
+
+export interface Verdict {
+  press_visible: boolean;
+  lid: LidState;
+  confidence: number; // 0..1
+}
+
+export interface ClassifyOptions {
+  prompt?: string;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  /** Optional labelled reference images (few-shot) sent before the live frame. */
+  refs?: { label: string; jpeg: Buffer }[];
+  /** Gemini 3 media resolution knob (LOW = fewest image tokens = fastest). null disables. Default LOW. */
+  geminiMediaResolution?: 'LOW' | 'MEDIUM' | 'HIGH' | null;
+}
+
+export interface ClassifyResult {
+  model: string;
+  provider: Provider;
+  verdict: Verdict | null;
+  latency_ms: number;
+  error?: string;
+  raw?: string;
+  usage?: unknown;
+}
+
+export const DEFAULT_PROMPT = `You are the vision checker for a lab workflow, looking through the wearer's smart-glasses camera.
+The object of interest is the PLATE PRESS. In this demo it is represented by a white / light-gray folding box with a hinged lid (a glasses case) sitting on a dark table.
+Report the state of the press in this single frame:
+- press_visible: true if the press is in view (even partially, even with a hand on it).
+- lid: "open" when the lid is raised / standing up so the inside of the box is visible; "closed" when the lid is fully down and the box is a flat closed rectangle; "partial" when the lid is in between (being moved); "unknown" when the press is not visible.
+- confidence: 0 to 1.
+Answer with the JSON object only.`;
+
+const JSON_SCHEMA = {
+  type: 'object',
+  properties: {
+    press_visible: { type: 'boolean' },
+    lid: { type: 'string', enum: ['open', 'closed', 'partial', 'unknown'] },
+    confidence: { type: 'number' },
+  },
+  required: ['press_visible', 'lid', 'confidence'],
+  additionalProperties: false,
+} as const;
+
+const GEMINI_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    press_visible: { type: 'BOOLEAN' },
+    lid: { type: 'STRING', enum: ['open', 'closed', 'partial', 'unknown'] },
+    confidence: { type: 'NUMBER' },
+  },
+  required: ['press_visible', 'lid', 'confidence'],
+  propertyOrdering: ['press_visible', 'lid', 'confidence'],
+};
+
+export function providerFor(model: string): Provider {
+  return /^(gemini|gemma|nano-banana)/i.test(model) ? 'gemini' : 'openai';
+}
+
+/** Curated candidates, fastest-first guesses; the benchmark re-ranks them empirically. */
+export const CANDIDATE_MODELS = [
+  'gemini-3.1-flash-lite',
+  'gemini-3.5-flash-lite',
+  'gemini-2.5-flash-lite',
+  'gemini-3.5-flash',
+  'gemini-3.8-flash',
+  'gemini-3-flash-preview',
+  'gemini-robotics-er-2-preview',
+  'gpt-5.4-nano',
+  'gpt-4.1-nano',
+  'gpt-4.1-mini',
+  'gpt-4o-mini',
+  'gpt-5.4-mini',
+  'gpt-5-nano',
+  'gpt-5.5',
+];
+
+// ---------- thinking / reasoning knob discovery (cached per model) ----------
+type GeminiThinking = Record<string, unknown> | null;
+const geminiThinkingCache = new Map<string, GeminiThinking>();
+function geminiThinkingVariants(model: string): GeminiThinking[] {
+  const cached = geminiThinkingCache.get(model);
+  if (cached !== undefined) return [cached];
+  if (/gemini-2\.5/.test(model)) return [{ thinkingBudget: 0 }, null];
+  if (/gemini-3/.test(model)) return [{ thinkingLevel: 'MINIMAL' }, { thinkingLevel: 'LOW' }, { thinkingBudget: 0 }, null];
+  return [null];
+}
+
+type OpenAIReasoning = string | null;
+const openaiReasoningCache = new Map<string, OpenAIReasoning>();
+function openaiReasoningVariants(model: string): OpenAIReasoning[] {
+  const cached = openaiReasoningCache.get(model);
+  if (cached !== undefined) return [cached];
+  if (/^(gpt-4|chatgpt)/.test(model)) return [null];
+  return ['none', 'minimal', 'low', null];
+}
+
+function withTimeout(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
+  const signals: AbortSignal[] = [AbortSignal.timeout(timeoutMs)];
+  if (signal) signals.push(signal);
+  return AbortSignal.any(signals);
+}
+
+function parseVerdict(text: string): Verdict {
+  // Tolerate code fences or stray prose around the JSON.
+  const m = text.match(/\{[\s\S]*\}/);
+  const obj = JSON.parse(m ? m[0] : text);
+  const lid = String(obj.lid ?? 'unknown').toLowerCase();
+  return {
+    press_visible: Boolean(obj.press_visible),
+    lid: (['open', 'closed', 'partial', 'unknown'] as LidState[]).includes(lid as LidState) ? (lid as LidState) : 'unknown',
+    confidence: Math.max(0, Math.min(1, Number(obj.confidence ?? 0.5))),
+  };
+}
+
+// ------------------------------- Gemini -------------------------------------
+async function classifyGemini(model: string, jpeg: Buffer, opts: ClassifyOptions): Promise<ClassifyResult> {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) throw new Error('GEMINI_API_KEY missing');
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+  const parts: unknown[] = [{ text: opts.prompt ?? DEFAULT_PROMPT }];
+  for (const r of opts.refs ?? []) {
+    parts.push({ text: `Reference image, ${r.label}:` });
+    parts.push({ inline_data: { mime_type: 'image/jpeg', data: r.jpeg.toString('base64') } });
+  }
+  if (opts.refs?.length) parts.push({ text: 'Now the live frame:' });
+  parts.push({ inline_data: { mime_type: 'image/jpeg', data: jpeg.toString('base64') } });
+
+  const mediaRes = opts.geminiMediaResolution === undefined ? 'LOW' : opts.geminiMediaResolution;
+  const t0 = performance.now();
+  let lastErr = '';
+  for (const thinking of geminiThinkingVariants(model)) {
+    const body = {
+      contents: [{ role: 'user', parts }],
+      generationConfig: {
+        temperature: 0,
+        maxOutputTokens: 256,
+        responseMimeType: 'application/json',
+        responseSchema: GEMINI_SCHEMA,
+        ...(thinking ? { thinkingConfig: thinking } : {}),
+        ...(mediaRes && /gemini-3/.test(model) ? { mediaResolution: `MEDIA_RESOLUTION_${mediaRes}` } : {}),
+      },
+    };
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
+      body: JSON.stringify(body),
+      signal: withTimeout(opts.signal, opts.timeoutMs ?? 20_000),
+    });
+    const text = await res.text();
+    if (res.status === 400 && thinking) {
+      lastErr = text.slice(0, 300);
+      continue; // this model rejects that thinking knob; try the next variant
+    }
+    if (!res.ok) return { model, provider: 'gemini', verdict: null, latency_ms: performance.now() - t0, error: `HTTP ${res.status}: ${text.slice(0, 300)}` };
+    geminiThinkingCache.set(model, thinking);
+    const data = JSON.parse(text);
+    const out = data?.candidates?.[0]?.content?.parts?.map((p: { text?: string }) => p.text ?? '').join('') ?? '';
+    try {
+      return { model, provider: 'gemini', verdict: parseVerdict(out), latency_ms: performance.now() - t0, raw: out, usage: data?.usageMetadata };
+    } catch (e) {
+      return { model, provider: 'gemini', verdict: null, latency_ms: performance.now() - t0, error: `bad JSON: ${out.slice(0, 200)} (${(e as Error).message})`, raw: out };
+    }
+  }
+  return { model, provider: 'gemini', verdict: null, latency_ms: performance.now() - t0, error: `all thinking variants rejected: ${lastErr}` };
+}
+
+// ------------------------------- OpenAI -------------------------------------
+async function classifyOpenAI(model: string, jpeg: Buffer, opts: ClassifyOptions): Promise<ClassifyResult> {
+  const key = process.env.OPENAI_API_KEY;
+  if (!key) throw new Error('OPENAI_API_KEY missing');
+  const content: unknown[] = [{ type: 'input_text', text: opts.prompt ?? DEFAULT_PROMPT }];
+  for (const r of opts.refs ?? []) {
+    content.push({ type: 'input_text', text: `Reference image, ${r.label}:` });
+    content.push({ type: 'input_image', image_url: `data:image/jpeg;base64,${r.jpeg.toString('base64')}`, detail: 'low' });
+  }
+  if (opts.refs?.length) content.push({ type: 'input_text', text: 'Now the live frame:' });
+  content.push({ type: 'input_image', image_url: `data:image/jpeg;base64,${jpeg.toString('base64')}`, detail: 'low' });
+
+  const t0 = performance.now();
+  let lastErr = '';
+  for (const effort of openaiReasoningVariants(model)) {
+    const body = {
+      model,
+      input: [{ role: 'user', content }],
+      text: { format: { type: 'json_schema', name: 'press_state', schema: JSON_SCHEMA, strict: true } },
+      max_output_tokens: 400,
+      store: false,
+      ...(effort ? { reasoning: { effort } } : {}),
+    };
+    const res = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+      body: JSON.stringify(body),
+      signal: withTimeout(opts.signal, opts.timeoutMs ?? 20_000),
+    });
+    const text = await res.text();
+    if (res.status === 400 && effort && /reasoning|effort/i.test(text)) {
+      lastErr = text.slice(0, 300);
+      continue;
+    }
+    if (!res.ok) return { model, provider: 'openai', verdict: null, latency_ms: performance.now() - t0, error: `HTTP ${res.status}: ${text.slice(0, 300)}` };
+    openaiReasoningCache.set(model, effort);
+    const data = JSON.parse(text);
+    let out = '';
+    for (const item of data?.output ?? []) {
+      if (item.type !== 'message') continue;
+      for (const c of item.content ?? []) if (c.type === 'output_text') out += c.text ?? '';
+    }
+    try {
+      return { model, provider: 'openai', verdict: parseVerdict(out), latency_ms: performance.now() - t0, raw: out, usage: data?.usage };
+    } catch (e) {
+      return { model, provider: 'openai', verdict: null, latency_ms: performance.now() - t0, error: `bad JSON (status=${data?.status}): ${out.slice(0, 200)} (${(e as Error).message})`, raw: out };
+    }
+  }
+  return { model, provider: 'openai', verdict: null, latency_ms: performance.now() - t0, error: `all reasoning variants rejected: ${lastErr}` };
+}
+
+export async function classifyFrame(model: string, jpeg: Buffer, opts: ClassifyOptions = {}): Promise<ClassifyResult> {
+  const provider = providerFor(model);
+  try {
+    return provider === 'gemini' ? await classifyGemini(model, jpeg, opts) : await classifyOpenAI(model, jpeg, opts);
+  } catch (e) {
+    return { model, provider, verdict: null, latency_ms: 0, error: (e as Error).name === 'TimeoutError' ? 'timeout' : String((e as Error).message ?? e) };
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "platepress-guide",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Rokid glasses + desktop guide for the plate-press motion (close -> 10s -> open), driven by vision LLMs.",
+  "scripts": {
+    "start": "node server/src/main.ts",
+    "dev": "node --watch server/src/main.ts",
+    "bench": "node tools/bench.ts"
+  },
+  "engines": { "node": ">=22.6" },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

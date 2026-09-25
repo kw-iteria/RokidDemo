@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PlatePress console</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="mark"></span>PlatePress</div>
+  <div class="top-status">
+    <span id="conn" class="pill">connecting</span>
+    <span id="src-pill" class="pill">no camera</span>
+    <span id="model-pill" class="pill">model</span>
+    <span id="lat-pill" class="pill">— ms</span>
+  </div>
+</header>
+
+<main class="console">
+  <section class="camera">
+    <div class="viewport">
+      <img id="live" alt="Live camera view from the glasses">
+      <div id="live-empty" class="empty">
+        <p>No camera yet.</p>
+        <p class="muted">Start the app on the glasses, replay the demo clip, or use this computer's camera.</p>
+      </div>
+      <div class="verdict-badge" id="verdict-badge"></div>
+    </div>
+    <div class="ribbon-wrap">
+      <canvas id="ribbon" height="28"></canvas>
+      <div class="legend"><i class="k open"></i>open <i class="k closed"></i>closed <i class="k partial"></i>partial <i class="k unknown"></i>not seen</div>
+    </div>
+  </section>
+
+  <section class="glasses">
+    <div class="bezel">
+      <div id="hud" class="hud" data-phase="IDLE">
+        <div class="reticle"><i></i><i></i><i></i><i></i></div>
+        <svg class="dial" viewBox="0 0 200 200" aria-hidden="true">
+          <circle class="track" cx="100" cy="100" r="88"></circle>
+          <circle id="dial-arc" class="arc" cx="100" cy="100" r="88"></circle>
+        </svg>
+        <div class="center">
+          <div id="hud-number" class="number"></div>
+          <div id="hud-check" class="check"><svg viewBox="0 0 64 64"><path d="M14 34 L27 47 L50 20"/></svg></div>
+          <div id="hud-message" class="message">Ready</div>
+          <div id="hud-sub" class="sub"></div>
+        </div>
+        <div class="hud-foot"><span id="hud-foot-left"></span><span id="hud-foot-right"></span></div>
+      </div>
+    </div>
+    <p class="caption">What the glasses show. Mirrored live from the server; the glasses render the same state locally.</p>
+    <div class="timing" id="timing"></div>
+  </section>
+</main>
+
+<section class="controls">
+  <div class="row">
+    <label>Camera
+      <select id="source"><option value="auto">automatic</option></select>
+    </label>
+    <label>Model
+      <select id="model"></select>
+    </label>
+    <label>Race with
+      <select id="model2"><option value="">nothing</option></select>
+    </label>
+    <label>In flight
+      <input id="inflight" type="number" min="1" max="6" value="3">
+    </label>
+    <label>Spacing (ms)
+      <input id="interval" type="number" min="50" step="50" value="250">
+    </label>
+    <label>Confirmations
+      <input id="confirm" type="number" min="1" max="5" value="2">
+    </label>
+    <label>Press time (s)
+      <input id="dwell" type="number" min="1" max="600" value="10">
+    </label>
+  </div>
+  <div class="row actions">
+    <button id="btn-restart" class="primary">Restart run</button>
+    <button id="btn-replay">Replay demo clip</button>
+    <button id="btn-webcam">Use this computer's camera</button>
+    <button id="btn-sound" aria-pressed="true">Sound on</button>
+    <button id="btn-voice" aria-pressed="false">Voice off</button>
+    <button id="btn-prompt">Edit prompt</button>
+    <span id="hosts" class="hosts"></span>
+  </div>
+  <div id="prompt-box" class="prompt-box" hidden>
+    <textarea id="prompt" rows="8" spellcheck="false"></textarea>
+    <div class="row"><button id="btn-prompt-save" class="primary">Save prompt</button><button id="btn-prompt-reset">Reset to default</button></div>
+  </div>
+  <ol id="log" class="log"></ol>
+</section>
+
+<video id="webcam-video" playsinline muted hidden></video>
+<canvas id="webcam-canvas" hidden></canvas>
+<script src="/app.js"></script>
+</body>
+</html>

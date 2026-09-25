@@ -1,0 +1,19 @@
+# secrets
+.env
+# original phone capture (26 MB HEVC); a rotated 640px H.264 copy lives in assets/
+proxy_press_motion.MOV
+# node
+node_modules/
+npm-debug.log
+# android
+glasses/.gradle/
+glasses/build/
+glasses/app/build/
+glasses/local.properties
+glasses/.idea/
+glasses/*.iml
+glasses/app/*.iml
+*.apk.idsig
+# misc
+.DS_Store
+bench-results/
