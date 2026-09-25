@@ -12,7 +12,7 @@ export interface SessionParams {
   hand_free_close: boolean;  // a CLOSE also needs no hand on the press in the confirming verdicts
   fast_confidence: number;   // a single verdict at/above this confidence is enough
   backdate: boolean;         // start the countdown at the capture time of the first "closed" frame
-  auto_restart_ms: number;   // 0 = wait for a tap/restart after COMPLETE
+  auto_restart_ms: number;   // how long the completion tick stays before the run ends and standby returns (0 = stay)
   lost_after_ms: number;     // show a "look at the press" hint after this long without seeing it
 }
 
@@ -25,7 +25,7 @@ export const DEFAULT_PARAMS: SessionParams = {
   hand_free_close: true,
   fast_confidence: 1.01,   // >1 disables the single-verdict shortcut
   backdate: true,
-  auto_restart_ms: 12_000,
+  auto_restart_ms: 3_000,
   lost_after_ms: 3_000,
 };
 
@@ -146,7 +146,7 @@ export class PressSession {
       return;
     }
     if (this.phase === 'COMPLETE' && this.params.auto_restart_ms > 0 && now - this.phase_since >= this.params.auto_restart_ms) {
-      this.idle(); // back to standby; the next "start" (chat, tap, button) begins a new run
+      this.idle('run finished'); // the run is over; standby until the next "start"
       return;
     }
     this.emit(false);
