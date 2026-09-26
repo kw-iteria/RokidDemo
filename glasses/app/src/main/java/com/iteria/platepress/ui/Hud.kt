@@ -25,11 +25,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
@@ -56,6 +56,7 @@ import com.iteria.platepress.HudState
 import kotlin.math.exp
 import kotlin.math.min
 import kotlin.math.sin
+import kotlinx.coroutines.delay
 
 /*
  * The glasses HUD. The Rokid waveguide is monochrome green and unlit pixels are see-through, so
@@ -168,17 +169,33 @@ private fun BreathingLine(text: String, u: Dp, scale: Float, floor: Float) {
 }
 
 /**
+ * A coarse clock for the always-on animations (idle mascot, listening wave): ticks `hz` times a
+ * second instead of on every display frame. Drawing the HUD costs ~30 ms a frame on this device, so a
+ * 60 Hz idle animation alone kept the UI and render threads busy (gfxinfo: 1 800 frames per 30 s in
+ * standby, 40% janky); at 15 Hz the mascot looks the same and the camera path gets the CPU.
+ */
+@Composable
+private fun rememberSlowClock(hz: Int): State<Long> {
+    val t = remember { mutableLongStateOf(0L) }
+    LaunchedEffect(hz) { val start = System.currentTimeMillis(); while (true) { t.longValue = System.currentTimeMillis() - start; delay(1000L / hz) } }
+    return t
+}
+private fun tri(x: Float) = 1f - kotlin.math.abs(2f * x - 1f)  // 0 → 1 → 0 over x in 0..1
+
+/**
  * The robot mascot: a helmet-shaped head with a face plate, two oval eyes, ear tabs and an antenna.
  * Eyes blink now and then and glance sideways while thinking; the antenna ball is filled while the
  * microphone is on. The face plate is drawn black, which is see-through on the waveguide.
  */
 @Composable
 private fun Robot(u: Dp, thinking: Boolean = false, size: Dp = u * 0.18f, listening: Boolean = true) {
-    val blink by rememberInfiniteTransition(label = "blink").animateFloat(0f, 1f, infiniteRepeatable(tween(3600, easing = LinearEasing)), label = "b")
-    val glance by rememberInfiniteTransition(label = "glance").animateFloat(-1f, 1f, infiniteRepeatable(tween(1100, easing = LinearEasing), RepeatMode.Reverse), label = "g")
-    val bob by rememberInfiniteTransition(label = "bob").animateFloat(0f, 1f, infiniteRepeatable(tween(1700, easing = LinearEasing), RepeatMode.Reverse), label = "o")
+    val clock by rememberSlowClock(15)
     Canvas(Modifier.size(size)) {
         val w = this.size.width; val h = this.size.height
+        // the same cycles the infinite transitions had: blink every 3.6 s, glance 1.1 s each way, bob 1.7 s each way
+        val blink = (clock % 3600L) / 3600f
+        val glance = tri((clock % 2200L) / 2200f) * 2f - 1f
+        val bob = tri((clock % 3400L) / 3400f)
         val dy = (bob - 0.5f) * h * 0.035f
         val plate = Color.Black
         // antenna
@@ -211,16 +228,16 @@ private fun Robot(u: Dp, thinking: Boolean = false, size: Dp = u * 0.18f, listen
  */
 @Composable
 private fun ListeningRobot(u: Dp) {
-    val t by rememberInfiniteTransition(label = "wave").animateFloat(0f, 1f, infiniteRepeatable(tween(1300, easing = LinearEasing)), label = "w")
+    val clock by rememberSlowClock(24)
     val robot = u * 0.16f
     Box(Modifier.width(robot * 3.4f).height(robot), contentAlignment = Alignment.Center) {
-        Canvas(Modifier.fillMaxSize()) { soundWave(t, alpha = 0.55f) }
+        Canvas(Modifier.fillMaxSize()) { soundWave((clock % 1300L) / 1300f, alpha = 0.55f) }
         Robot(u, size = robot)
         Canvas(Modifier.fillMaxSize()) {
             // the robot's face plate, in this wider canvas (see Robot: x 0.19..0.81, y 0.33..0.78 of its size)
             val side = size.height
             val left = (size.width - side) / 2f
-            clipRect(left + side * 0.21f, side * 0.35f, left + side * 0.79f, side * 0.76f) { soundWave(t, alpha = 1f) }
+            clipRect(left + side * 0.21f, side * 0.35f, left + side * 0.79f, side * 0.76f) { soundWave((clock % 1300L) / 1300f, alpha = 1f) }
         }
     }
 }
@@ -306,7 +323,7 @@ private fun AlarmFrame(u: Dp) {
 @Composable
 private fun CountdownDial(state: HudState, serverNow: () -> Long, u: Dp) {
     var now by remember { mutableLongStateOf(serverNow()) }
-    LaunchedEffect(Unit) { while (true) withFrameMillis { now = serverNow() } }
+    LaunchedEffect(Unit) { while (true) { now = serverNow(); delay(50) } } // 20 Hz is smooth for a 10 s arc and a quarter of the frames
     val remaining = (state.countdownEndsAt - now).coerceIn(0L, state.countdownDurationMs)
     val frac = remaining.toFloat() / state.countdownDurationMs.toFloat()
     val seconds = ((remaining + 999) / 1000).toInt()
