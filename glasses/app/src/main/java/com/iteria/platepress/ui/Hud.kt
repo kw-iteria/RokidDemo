@@ -40,7 +40,9 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathMeasure
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
@@ -51,7 +53,9 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import com.iteria.platepress.HudState
+import kotlin.math.exp
 import kotlin.math.min
+import kotlin.math.sin
 
 /*
  * The glasses HUD. The Rokid waveguide is monochrome green and unlit pixels are see-through, so
@@ -65,8 +69,7 @@ private val Faint = Color.White.copy(alpha = 0.16f)
 
 @Composable
 fun Hud(state: HudState, serverNow: () -> Long, fps: () -> Float) {
-    var now by remember { mutableLongStateOf(serverNow()) }
-    LaunchedEffect(Unit) { while (true) withFrameMillis { now = serverNow() } }
+    // The per-frame clock lives inside CountdownDial, so only the dial redraws at display rate.
 
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val u = min(maxWidth.value, maxHeight.value).dp
@@ -76,7 +79,7 @@ fun Hud(state: HudState, serverNow: () -> Long, fps: () -> Float) {
         }
         Box(Modifier.align(Alignment.TopEnd).padding(top = u * 0.045f, end = u * 0.045f).size(u * 0.27f)) {
             when (state.phase) {
-                "COUNTDOWN" -> CountdownDial(state, now, u)
+                "COUNTDOWN" -> CountdownDial(state, serverNow, u)
                 "COMPLETE" -> CheckMark(state, u)
             }
         }
@@ -101,8 +104,6 @@ private fun Line(text: String, u: Dp, scale: Float, color: Color = Ink, weight: 
 /** Instruction line(s) along the bottom; the assistant's latest reply floats just above while fresh. */
 @Composable
 private fun Subtitle(state: HudState, u: Dp, modifier: Modifier) {
-    val pulse by rememberInfiniteTransition(label = "alarm").animateFloat(1f, 0.25f, infiniteRepeatable(tween(450, easing = LinearEasing), RepeatMode.Reverse), label = "a")
-    val breathe by rememberInfiniteTransition(label = "breathe").animateFloat(0.35f, 1f, infiniteRepeatable(tween(1400), RepeatMode.Reverse), label = "b")
     val chatFresh = state.chatText.isNotBlank() && System.currentTimeMillis() - state.chatAt < 12_000
     val heardFresh = state.heardText.isNotBlank() && System.currentTimeMillis() - state.heardAt < 6_000
     Column(modifier.fillMaxWidth().padding(bottom = u * 0.11f), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Bottom) {
@@ -111,16 +112,20 @@ private fun Subtitle(state: HudState, u: Dp, modifier: Modifier) {
             Spacer(Modifier.height(u * 0.012f))
         }
         when {
-            state.speaking -> Row(verticalAlignment = Alignment.CenterVertically) { Robot(u, size = u * 0.1f); Spacer(Modifier.width(u * 0.02f)); Line("Listening…", u, 0.04f, color = Dim.copy(alpha = 0.3f + 0.6f * breathe), weight = FontWeight.Normal) }
+            state.speaking -> ListeningRobot(u)
             state.chatStreaming.isNotEmpty() -> Row(verticalAlignment = Alignment.Bottom) { Robot(u, size = u * 0.1f); Spacer(Modifier.width(u * 0.02f)); Bubble(state.chatStreaming, u) }
             state.thinking -> Row(verticalAlignment = Alignment.CenterVertically) { Robot(u, thinking = true, size = u * 0.1f); Spacer(Modifier.width(u * 0.02f)); ThinkingBubble(u) }
             chatFresh -> Row(verticalAlignment = Alignment.Bottom) { Robot(u, size = u * 0.1f); Spacer(Modifier.width(u * 0.02f)); Bubble(state.chatText, u) }
         }
         Spacer(Modifier.height(u * 0.02f))
         when (state.phase) {
-            "CONNECTING" -> {
-                Line(if (state.connected) "Connected" else "Looking for the Iteria server on this network", u, 0.045f, color = Dim.copy(alpha = 0.4f + 0.5f * breathe), weight = FontWeight.Normal)
-                if (state.host.isNotBlank()) Line(state.host, u, 0.032f, color = Faint, weight = FontWeight.Normal)
+            "CONNECTING" -> when {
+                state.connected -> Line("Connected", u, 0.045f, color = Dim, weight = FontWeight.Normal)
+                state.pairing.isNotBlank() -> BreathingLine(state.pairing, u, 0.045f, floor = 0.5f)
+                else -> {
+                    BreathingLine("Look at the code on the Iteria screen", u, 0.045f, floor = 0.4f)
+                    Line("a hand's span away, or click it to make it bigger", u, 0.032f, color = Faint, weight = FontWeight.Normal)
+                }
             }
             "IDLE" -> {
                 val busy = state.speaking || state.thinking || state.chatStreaming.isNotEmpty() || chatFresh
@@ -129,7 +134,7 @@ private fun Subtitle(state: HudState, u: Dp, modifier: Modifier) {
             }
             "COUNTDOWN" -> Line(state.sub, u, 0.042f, color = Dim, weight = FontWeight.Normal)
             "AWAIT_OPEN" -> {
-                Line(state.message, u, 0.062f, weight = FontWeight.SemiBold, modifier = Modifier.graphicsLayer { alpha = 0.55f + 0.45f * pulse })
+                PulsingLine(state.message, u, 0.062f)
                 Line(state.hint.ifBlank { state.sub }, u, 0.036f, color = Dim, weight = FontWeight.Normal)
             }
             "COMPLETE" -> {
@@ -142,6 +147,24 @@ private fun Subtitle(state: HudState, u: Dp, modifier: Modifier) {
             }
         }
     }
+}
+
+/*
+ * The animated lines own their animation, so it only runs while that line is on screen and its value
+ * is read when drawing (a layer alpha), not in composition. Before, the alarm pulse and the pairing
+ * breathe ran in Subtitle for every phase and re-laid the text out on every display frame; the HUD
+ * spent ~29 ms per frame (31% janky, gfxinfo) on a device already at 94 °C.
+ */
+@Composable
+private fun PulsingLine(text: String, u: Dp, scale: Float) {
+    val pulse by rememberInfiniteTransition(label = "alarm").animateFloat(1f, 0.25f, infiniteRepeatable(tween(450, easing = LinearEasing), RepeatMode.Reverse), label = "a")
+    Line(text, u, scale, weight = FontWeight.SemiBold, modifier = Modifier.graphicsLayer { alpha = 0.55f + 0.45f * pulse })
+}
+
+@Composable
+private fun BreathingLine(text: String, u: Dp, scale: Float, floor: Float) {
+    val breathe by rememberInfiniteTransition(label = "breathe").animateFloat(0.35f, 1f, infiniteRepeatable(tween(1400), RepeatMode.Reverse), label = "b")
+    Line(text, u, scale, color = Ink, weight = FontWeight.Normal, modifier = Modifier.graphicsLayer { alpha = floor + 0.5f * breathe })
 }
 
 /**
@@ -181,6 +204,49 @@ private fun Robot(u: Dp, thinking: Boolean = false, size: Dp = u * 0.18f, listen
     }
 }
 
+/**
+ * Shown while the wearer is talking: a sound-wave packet sweeps left to right through the robot.
+ * The wave is drawn behind the helmet and again inside the see-through face plate, so it reads as
+ * passing *through* the robot's face.
+ */
+@Composable
+private fun ListeningRobot(u: Dp) {
+    val t by rememberInfiniteTransition(label = "wave").animateFloat(0f, 1f, infiniteRepeatable(tween(1300, easing = LinearEasing)), label = "w")
+    val robot = u * 0.16f
+    Box(Modifier.width(robot * 3.4f).height(robot), contentAlignment = Alignment.Center) {
+        Canvas(Modifier.fillMaxSize()) { soundWave(t, alpha = 0.55f) }
+        Robot(u, size = robot)
+        Canvas(Modifier.fillMaxSize()) {
+            // the robot's face plate, in this wider canvas (see Robot: x 0.19..0.81, y 0.33..0.78 of its size)
+            val side = size.height
+            val left = (size.width - side) / 2f
+            clipRect(left + side * 0.21f, side * 0.35f, left + side * 0.79f, side * 0.76f) { soundWave(t, alpha = 1f) }
+        }
+    }
+}
+
+/** A travelling wave packet across the canvas, centred on the robot's eye line; it fades out away
+ *  from the packet so only the moving wave is visible (no resting line through the face). */
+private fun DrawScope.soundWave(t: Float, alpha: Float) {
+    val w = size.width
+    val h = size.height
+    val cy = h * 0.555f
+    val centre = -0.25f * w + t * 1.5f * w      // packet position sweeps from off-left to off-right
+    val sigma = w * 0.16f
+    val k = (2f * Math.PI / (h * 0.42f)).toFloat()
+    val stroke = h * 0.035f
+    val steps = 120
+    var px = 0f
+    var py = cy
+    for (i in 0..steps) {
+        val x = w * i / steps
+        val env = exp(-((x - centre) / sigma).let { it * it })
+        val y = cy + env * h * 0.2f * sin(k * x - t * 18f)
+        if (i > 0 && env > 0.02f) drawLine(Ink.copy(alpha = alpha * minOf(1f, env * 1.6f)), Offset(px, py), Offset(x, y), stroke, StrokeCap.Round)
+        px = x; py = y
+    }
+}
+
 @Composable
 private fun Bubble(text: String, u: Dp) {
     Text(
@@ -205,9 +271,10 @@ private fun ThinkingBubble(u: Dp) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         for (i in 0 until 3) {
-            val d = kotlin.math.abs(((phase - i + 3f) % 3f) - 1.5f)   // 0 = lit, 1.5 = dim
-            val a = (1f - d / 1.5f).coerceIn(0.15f, 1f)
-            Canvas(Modifier.size(u * 0.022f)) { drawCircle(Ink.copy(alpha = a)) }
+            Canvas(Modifier.size(u * 0.022f)) {
+                val d = kotlin.math.abs(((phase - i + 3f) % 3f) - 1.5f)   // 0 = lit, 1.5 = dim (read while drawing: no recomposition per frame)
+                drawCircle(Ink.copy(alpha = (1f - d / 1.5f).coerceIn(0.15f, 1f)))
+            }
         }
     }
 }
@@ -237,7 +304,9 @@ private fun AlarmFrame(u: Dp) {
 
 /** Small ring with the remaining seconds, in the top-right corner. */
 @Composable
-private fun CountdownDial(state: HudState, now: Long, u: Dp) {
+private fun CountdownDial(state: HudState, serverNow: () -> Long, u: Dp) {
+    var now by remember { mutableLongStateOf(serverNow()) }
+    LaunchedEffect(Unit) { while (true) withFrameMillis { now = serverNow() } }
     val remaining = (state.countdownEndsAt - now).coerceIn(0L, state.countdownDurationMs)
     val frac = remaining.toFloat() / state.countdownDurationMs.toFloat()
     val seconds = ((remaining + 999) / 1000).toInt()

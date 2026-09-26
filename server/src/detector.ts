@@ -1,6 +1,6 @@
 // Frame scheduler: keeps up to N model requests in flight against the newest frame,
 // optionally racing several models per frame and taking the first valid verdict.
-import { classifyFrame, type ClassifyResult, type Verdict } from './vision.ts';
+import { classifyFrame, providerFor, type ClassifyResult, type Verdict } from './vision.ts';
 import type { Frame } from './frames.ts';
 import { boxArea, cropAround, cropJpeg, cropTight, uncrop, ZOOM_TRIGGER_AREA, type Crop } from './zoom.ts';
 import { classifyLocal, localAvailable } from './local.ts';
@@ -170,7 +170,11 @@ export class Detector {
         if ((this.coolDownUntil.get(m) ?? 0) > now) throw new Error(`${m}: cooling down after rate limit`);
         const pace = MODEL_PACE_MS[m.split('/')[0]] ?? 0;
         if (pace) { const wait = (this.lastStartByModel.get(m) ?? 0) + pace - now; if (wait > 0) await new Promise((r) => setTimeout(r, wait)); this.lastStartByModel.set(m, Date.now()); }
-        const r = await classifyFrame(m, jpeg, { prompt: this.config.prompt, signal: ac.signal, timeoutMs: this.config.timeoutMs, refs: this.config.refs });
+        // Only a persistent (realtime) session gets the race-abort signal: cancelling an HTTP request
+        // mid-flight makes undici destroy its socket, so every raced frame cost the next request a
+        // fresh TCP+TLS handshake. A losing HTTP call is left to finish; its answer is just ignored.
+        const signal = providerFor(m) === 'openai-realtime' ? ac.signal : undefined;
+        const r = await classifyFrame(m, jpeg, { prompt: this.config.prompt, signal, timeoutMs: this.config.timeoutMs, refs: this.config.refs });
         if (!r.verdict) {
           if (r.error !== 'aborted') { const pm = this.perModel.get(m) ?? { wins: 0, lat: [], errors: 0 }; pm.errors++; this.perModel.set(m, pm); }
           if (/429|too many|quota/i.test(r.error ?? '')) this.coolDownUntil.set(m, Date.now() + COOL_DOWN_MS);
@@ -192,7 +196,7 @@ export class Detector {
         winner = found;
       }
       { const pm = this.perModel.get(winner.model) ?? { wins: 0, lat: [], errors: 0 }; pm.wins++; pm.lat.push(winner.latency_ms); if (pm.lat.length > 40) pm.lat.shift(); this.perModel.set(winner.model, pm); }
-      ac.abort(); // cancel the slower racers
+      ac.abort(); // cancel the slower racers (persistent sessions only, see `attempt`)
       const latency_ms = performance.now() - t0;
       this.latencies.push(latency_ms);
       if (this.latencies.length > 40) this.latencies.shift();
@@ -226,6 +230,7 @@ export class Detector {
     } finally {
       this.inflight--;
       if (asVerifier) this.verifierInflight--;
+      this.pump(); // a slot just freed: judge the newest frame now instead of on the next 40 ms tick
     }
   }
 

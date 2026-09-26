@@ -17,5 +17,8 @@ echo "built $APK"
 "$ADB" install -r "$APK"
 "$ADB" shell pm grant com.iteria.platepress android.permission.CAMERA || true
 "$ADB" shell pm grant com.iteria.platepress android.permission.RECORD_AUDIO || true
+# USB fallback: the app also tries localhost:8787, which this forwards to the server on this Mac.
+# Lets the glasses work while the cable is in, even on Wi-Fi that isolates devices from each other.
+"$ADB" reverse tcp:8787 tcp:8787 || true
 "$ADB" shell am start -n com.iteria.platepress/.MainActivity
 echo "PlatePress launched on the glasses. Start the server with: npm start"

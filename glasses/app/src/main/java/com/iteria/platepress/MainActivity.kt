@@ -7,6 +7,8 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.KeyEvent
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -29,12 +31,26 @@ class MainActivity : ComponentActivity() {
     }
 
     // Rokid temple button: tap = interrupt the assistant and listen (never mutes),
-    // double tap = start / restart the workflow, long press (when the system lets it through) = microphone mute/unmute.
+    // double tap = start / restart the workflow, triple tap = new conversation,
+    // long press (when the system lets it through) = microphone mute/unmute.
+    // The system only reports tap / double tap / long press, so a triple tap is a double tap followed
+    // by a tap within TRIPLE_WINDOW_MS; the double-tap action waits that long to tell them apart.
+    private val ui = Handler(Looper.getMainLooper())
+    private var pendingDouble: Runnable? = null
     private val gestures = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.action) {
-                ACTION_CLICK -> model.attention()
-                ACTION_DOUBLE_CLICK -> model.gesture("restart")
+                ACTION_CLICK -> {
+                    val double = pendingDouble
+                    if (double != null) { ui.removeCallbacks(double); pendingDouble = null; model.newConversation() }
+                    else model.attention()
+                }
+                ACTION_DOUBLE_CLICK -> {
+                    pendingDouble?.let { ui.removeCallbacks(it) }
+                    val r = Runnable { pendingDouble = null; model.gesture("restart") }
+                    pendingDouble = r
+                    ui.postDelayed(r, TRIPLE_WINDOW_MS)
+                }
                 ACTION_LONG_PRESS -> model.toggleMic()
             }
         }
@@ -55,7 +71,7 @@ class MainActivity : ComponentActivity() {
             camera?.let { c ->
                 c.extraRotation = j.optInt("rotation", c.extraRotation)
                 c.mirror = j.optBoolean("mirror", c.mirror)
-                c.targetLongEdge = j.optInt("longEdge", c.targetLongEdge)
+                c.setLongEdge(j.optInt("longEdge", c.targetLongEdge))
                 c.targetFps = j.optDouble("fps", c.targetFps)
                 c.aspect = j.optString("aspect", c.aspect)
             }
@@ -87,12 +103,26 @@ class MainActivity : ComponentActivity() {
                 c.targetLongEdge = j.optInt("longEdge", 480); c.targetFps = j.optDouble("fps", 6.0)
                 c.aspect = j.optString("aspect", "native")
             }
+            c.scanner = { bmp -> model.scanForPairing(bmp) }
+            c.scanWhile = { !model.link.connected }
+            c.wanted = { model.link.connected && !model.link.congested() }
             c.start()
         }
     }
 
+    // Keeps the Wi-Fi radio out of power save while Iteria is on screen. Measured without it (Rokid
+    // RG-glasses, Android 12, 2.4 GHz): Mac -> glasses round trip 61 ms average, 221 ms worst, because the
+    // radio sleeps between beacons; that delays the spoken replies and HUD updates sent to the glasses.
+    private val wifiLock by lazy {
+        val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+        @Suppress("DEPRECATION")
+        val mode = if (android.os.Build.VERSION.SDK_INT >= 29) android.net.wifi.WifiManager.WIFI_MODE_FULL_LOW_LATENCY else android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF
+        wm.createWifiLock(mode, "iteria-low-latency").apply { setReferenceCounted(false) }
+    }
+
     override fun onResume() {
         super.onResume()
+        try { wifiLock.acquire() } catch (e: Exception) { android.util.Log.w("MainActivity", "wifi lock: ${e.message}") }
         val filter = IntentFilter().apply {
             addAction(ACTION_CLICK); addAction(ACTION_DOUBLE_CLICK); addAction(ACTION_LONG_PRESS)
             priority = 100
@@ -102,6 +132,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onPause() {
         try { unregisterReceiver(gestures) } catch (_: Exception) {}
+        try { if (wifiLock.isHeld) wifiLock.release() } catch (_: Exception) {}
         super.onPause()
     }
 
@@ -117,6 +148,7 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
+        const val TRIPLE_WINDOW_MS = 450L
         const val ACTION_CLICK = "com.android.action.ACTION_SPRITE_BUTTON_CLICK"
         const val ACTION_DOUBLE_CLICK = "com.android.action.ACTION_SPRITE_BUTTON_DOUBLE_CLICK"
         const val ACTION_LONG_PRESS = "com.android.action.ACTION_SPRITE_BUTTON_LONG_PRESS"

@@ -31,7 +31,7 @@ const reasoningCache = new Map<string, string | null>();
 export async function streamChat(
   model: string,
   messages: ChatMsg[],
-  opts: { tools?: ChatTool[]; maxTokens?: number; temperature?: number; onDelta?: (text: string) => void; signal?: AbortSignal; timeoutMs?: number; stream?: boolean } = {},
+  opts: { tools?: ChatTool[]; maxTokens?: number; temperature?: number; onDelta?: (text: string) => void; signal?: AbortSignal; timeoutMs?: number; stream?: boolean; firstByteMs?: number } = {},
 ): Promise<ChatResult> {
   const { ep, name } = endpointFor(model);
   const key = ep.key ? process.env[ep.key] || (ep.alt ? process.env[ep.alt] : '') : '';
@@ -54,12 +54,21 @@ export async function streamChat(
     const t0 = performance.now();
     const signals = [AbortSignal.timeout(opts.timeoutMs ?? 30_000)];
     if (opts.signal) signals.push(opts.signal);
-    const res = await fetch(`${ep.base}/chat/completions`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', ...(key ? { authorization: `Bearer ${key}` } : {}) },
-      body: JSON.stringify(body),
-      signal: AbortSignal.any(signals),
-    });
+    // Optional deadline for the response to start: a stalled vendor fails fast so the caller can fall back.
+    const firstByte = opts.firstByteMs ? new AbortController() : null;
+    const firstByteTimer = firstByte ? setTimeout(() => firstByte.abort(new Error(`no response from ${model} within ${opts.firstByteMs} ms`)), opts.firstByteMs) : null;
+    if (firstByte) signals.push(firstByte.signal);
+    let res: Response;
+    try {
+      res = await fetch(`${ep.base}/chat/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...(key ? { authorization: `Bearer ${key}` } : {}) },
+        body: JSON.stringify(body),
+        signal: AbortSignal.any(signals),
+      });
+    } finally {
+      if (firstByteTimer) clearTimeout(firstByteTimer);
+    }
     if (!res.ok) {
       const errText = await res.text();
       if (res.status === 400 && effort !== null && /reasoning|effort|unsupported|not supported|invalid/i.test(errText)) { lastErr = errText.slice(0, 200); continue; }

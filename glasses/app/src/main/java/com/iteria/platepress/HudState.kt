@@ -28,6 +28,7 @@ data class HudState(
     val listening: Boolean = false,   // microphone armed (always-on mode)
     val speaking: Boolean = false,    // operator is talking right now
     val thinking: Boolean = false,    // waiting for the assistant
+    val pairing: String = "",        // "look at the screen" pairing progress, shown while connecting
 ) {
     companion object {
         fun fromServer(json: JSONObject, prev: HudState): HudState {

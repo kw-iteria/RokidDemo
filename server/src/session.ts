@@ -14,7 +14,12 @@ export interface SessionParams {
   backdate: boolean;         // start the countdown at the capture time of the first "closed" frame
   auto_restart_ms: number;   // how long the completion tick stays before the run ends and standby returns (0 = stay)
   lost_after_ms: number;     // show a "look at the press" hint after this long without seeing it
+  quick_confirmations: number;   // fast path: the newest verdicts agree and are confident (at/above…
+  quick_min_confidence: number;  // …this): act at once, without settle or majority; verified and rolled back if contradicted
 }
+
+/** How far back a vote looks for its run of agreeing verdicts (bounded, so an old verdict can't vote). */
+const VOTE_LOOKBACK_MS = 4000;
 
 export const DEFAULT_PARAMS: SessionParams = {
   countdown_ms: 10_000,
@@ -27,6 +32,8 @@ export const DEFAULT_PARAMS: SessionParams = {
   backdate: true,
   auto_restart_ms: 3_000,
   lost_after_ms: 3_000,
+  quick_confirmations: 1,  // the workflow moves on the same verdict the camera label shows
+  quick_min_confidence: 0.8,
 };
 
 export interface VerdictEvent {
@@ -51,6 +58,7 @@ export interface SessionSnapshot {
   last_verdict: (Verdict & { age_ms: number; latency_ms: number; model: string }) | null;
   events: { at: number; text: string }[];
   streak: { state: string | null; count: number; span_ms: number; hand_free: number; open_seen: number };
+  why: string;  // why the latest verdict did not move the workflow although it shows the wanted state ('' = it did, or n/a)
 }
 
 const TEXT: Record<Phase, { message: string; sub: string }> = {
@@ -77,12 +85,14 @@ export class PressSession {
   private visibleStreakState: string | null = null;
   private visibleStreakCount = 0;
   /** Recent accepted verdicts (newest last) for window votes. */
-  private window: { ts: number; lid: string; hand: boolean; far: boolean }[] = [];
+  private window: { ts: number; lid: string; hand: boolean; far: boolean; conf?: number }[] = [];
   private farSince = 0;
   private rollbackVotes = 0;
   private lastSeenTs = 0;
   private lastVerdict: VerdictEvent | null = null;
   private lastAcceptedFrameTs = 0;
+  /** Why the latest verdict showed the wanted state but did not move the workflow (empty when it did). */
+  blocked = '';
   private countdown: SessionSnapshot['countdown'] = null;
   private events: { at: number; text: string }[] = [];
   private listeners = new Set<(s: SessionSnapshot, changed: boolean) => void>();
@@ -101,6 +111,19 @@ export class PressSession {
     if (this.events.length > 60) this.events.shift();
   }
 
+  private phaseTimer: NodeJS.Timeout | null = null;
+
+  /** Fires the next time-based transition exactly on time (the ~10 Hz tick remains a backstop). */
+  private scheduleTimedTransition(): void {
+    if (this.phaseTimer) { clearTimeout(this.phaseTimer); this.phaseTimer = null; }
+    let due = 0;
+    if (this.phase === 'COUNTDOWN' && this.countdown) due = this.countdown.ends_at;
+    else if (this.phase === 'COMPLETE' && this.params.auto_restart_ms > 0) due = this.phase_since + this.params.auto_restart_ms;
+    if (!due) return;
+    this.phaseTimer = setTimeout(() => { this.phaseTimer = null; this.tick(); }, Math.max(0, due - Date.now()));
+    this.phaseTimer.unref?.();
+  }
+
   private setPhase(p: Phase, now = Date.now()): void {
     if (p === this.phase) return;
     this.log(`${this.phase} → ${p}`);
@@ -110,6 +133,8 @@ export class PressSession {
     this.streakCount = 0;
     if (p !== 'COUNTDOWN') this.countdown = null;
     this.rollbackVotes = 0;
+    this.blocked = '';
+    this.scheduleTimedTransition();
     this.emit(true);
   }
 
@@ -170,9 +195,9 @@ export class PressSession {
     if (v.press_visible && v.lid !== 'unknown' && far) this.farSince = this.farSince || ev.frame_ts; else if (v.press_visible && !far) this.farSince = 0;
     const lid = !v.press_visible ? 'none' : v.lid;
     if (!(moving && v.press_visible)) {
-      this.window.push({ ts: ev.frame_ts, lid, hand: Boolean(v.hand_on_press), far });
+      this.window.push({ ts: ev.frame_ts, lid, hand: Boolean(v.hand_on_press), far, conf: v.confidence });
       this.window.sort((a, b) => a.ts - b.ts);
-      const keepFrom = Math.max(ev.frame_ts, this.lastAcceptedFrameTs) - Math.max(this.params.settle_ms, 1500) * 2;
+      const keepFrom = Math.max(ev.frame_ts, this.lastAcceptedFrameTs) - (VOTE_LOOKBACK_MS + Math.max(this.params.settle_ms, 2500)); // longest vote plus margin
       this.window = this.window.filter((w) => w.ts >= keepFrom);
       if (lid === 'open' && !far) this.openSeen++;
     }
@@ -181,22 +206,41 @@ export class PressSession {
     else { this.visibleStreakState = visibleState; this.visibleStreakCount = 1; }
 
     /**
-     * Look back `span` ms (longer than the settle time): every verdict in that span must be `state`
-     * (or a harmless partial/none minority), the oldest agreeing one must be at least `settle` ms old,
-     * and none of them may have seen the press tiny.
+     * The run of verdicts since the last contradicting one (within VOTE_LOOKBACK_MS): it must contain at
+     * least `confirmations` agreeing verdicts, the first of them at least `settle` ms old, agreeing ones
+     * must be the clear majority (partials are the minority), and the confirming ones may not see the
+     * press tiny. "Not seen" frames neither agree nor contradict.
+     * (Before: a fixed look-back of settle + 500 ms. With 5 confirmations at ~6 verdicts/s that window
+     * could almost never hold 5 votes, so the countdown started seconds late and the alarm kept going.)
      */
-    const vote = (state: 'open' | 'closed', settle: number) => {
-      const span = settle + 500; // contradiction lookback: a little longer than the settle time
+    const vote = (state: 'open' | 'closed', settle: number, allowQuick = true) => {
       const now = Math.max(ev.frame_ts, this.lastAcceptedFrameTs);
-      const from = now - span;
-      const recent = this.window.filter((w) => w.ts >= from && w.lid !== 'none'); // "not seen" neither agrees nor contradicts
-      const agree = recent.filter((w) => w.lid === state);
-      const contradict = recent.filter((w) => w.lid === (state === 'open' ? 'closed' : 'open'));
-      const anyFar = agree.some((w) => w.far);
+      const opposite = state === 'open' ? 'closed' : 'open';
+      const recent = this.window.filter((w) => w.ts >= now - Math.max(VOTE_LOOKBACK_MS, settle + 1500) && w.lid !== 'none');
+      let start = 0;
+      for (let i = 0; i < recent.length; i++) if (recent[i].lid === opposite) start = i + 1;
+      const run = recent.slice(start);
+      const agree = run.filter((w) => w.lid === state);
+      // Fast path: the newest verdict(s) are confident and agree, and nothing since the last contradiction
+      // says otherwise: act on them now, with no settle time and no majority (the camera label and the
+      // workflow then move on the same verdict); COUNTDOWN / COMPLETE verify and roll back if needed.
+      const quickN = Math.max(1, Math.min(this.params.confirmations, this.params.quick_confirmations ?? this.params.confirmations));
+      const tail = run.slice(-quickN);
+      const quick = allowQuick && tail.length === quickN && tail.every((w) => w.lid === state && !w.far && (w.conf ?? 0) >= (this.params.quick_min_confidence ?? 1.01));
+      const confirming = quick ? tail : agree.slice(-this.params.confirmations);
       const firstAgree = agree[0]?.ts ?? 0;
-      const handFree = agree.length > 0 && agree.slice(-this.params.confirmations).every((w) => !w.hand);
-      const ok = agree.length >= this.params.confirmations && contradict.length === 0 && !anyFar && agree.length >= recent.length * 0.6 && now - firstAgree >= settle;
+      const handFree = confirming.length > 0 && confirming.every((w) => !w.hand);
+      const ok = quick || (agree.length >= this.params.confirmations && !confirming.some((w) => w.far)
+        && agree.length >= run.length * 0.6 && now - firstAgree >= settle);
       return { ok, count: agree.length, firstTs: firstAgree, handFree };
+    };
+    // What to tell the wearer when the verdict shows the wanted state but the workflow can't move on it yet.
+    const why = (wanted: 'open' | 'closed', letGo: boolean) => {
+      if (lid !== wanted) return '';
+      if (letGo) return 'Let go of the press';
+      if (far) return 'Move closer to the press';
+      if (moving) return 'Hold still';
+      return 'Checking…'; // low confidence, or the lid was still moving a moment ago
     };
     // keep the old streak fields roughly meaningful for the diagnostics line
     if (this.streakState === lid) { this.streakCount++; this.streakLastTs = ev.frame_ts; } else { this.streakState = lid; this.streakCount = 1; this.streakFirstTs = ev.frame_ts; this.streakLastTs = ev.frame_ts; this.handFreeCount = 0; }
@@ -204,23 +248,26 @@ export class PressSession {
 
     switch (this.phase) {
       case 'SEARCHING':
-        if (this.visibleStreakState === 'visible' && this.visibleStreakCount >= this.params.confirmations) this.setPhase('AWAIT_CLOSE', ev.frame_ts);
+        if (this.visibleStreakState === 'visible' && this.visibleStreakCount >= Math.min(this.params.confirmations, 2)) this.setPhase('AWAIT_CLOSE', ev.frame_ts);
         break;
       case 'AWAIT_CLOSE': {
         const c = vote('closed', this.params.settle_ms);
-        const longClosed = vote('closed', 2500);
-        if (c.ok && (this.openSeen >= this.params.confirmations || longClosed.ok) && (c.handFree || !this.params.hand_free_close || longClosed.ok)) {
+        const longClosed = vote('closed', 2500, false); // genuinely closed for a while: no fast path here
+        // a close counts once the press was seen open this run (or has been closed for a while anyway)
+        const seenOpen = this.openSeen >= Math.min(this.params.confirmations, 2) || longClosed.ok;
+        const letGo = this.params.hand_free_close && !c.handFree && !longClosed.ok;
+        if (c.ok && seenOpen && !letGo) {
           const started_at = this.params.backdate ? c.firstTs : Date.now();
           this.countdown = { started_at, ends_at: started_at + this.params.countdown_ms, duration_ms: this.params.countdown_ms };
           this.log(`closed detected: ${c.count} agreeing verdicts over ${ev.frame_ts - c.firstTs} ms, none contradicting (model latency ${Math.round(ev.latency_ms)} ms, backdated ${Date.now() - started_at} ms)`);
           this.setPhase('COUNTDOWN', started_at);
-        }
+        } else this.blocked = why('closed', c.ok && letGo);
         break;
       }
       case 'COUNTDOWN': {
         // Safety net for the fast local path: if within the first 3 s the (slower, more accurate) verdicts
         // say the press is open twice, the close was a misread: cancel the countdown.
-        if (this.countdown && ev.frame_ts - this.countdown.started_at < 3000 && ev.model.startsWith('gpt') && lid === 'open' && v.confidence >= 0.8) {
+        if (this.countdown && ev.frame_ts - this.phase_since < 3000 && !ev.model.startsWith('local') && lid === 'open' && v.confidence >= 0.8) {
           this.rollbackVotes++;
           if (this.rollbackVotes >= 2) {
             this.rollbackVotes = 0;
@@ -231,12 +278,25 @@ export class PressSession {
         }
         break;
       }
+      case 'COMPLETE': {
+        // Verification of a fast "open": if confident verdicts right after it still see the press closed,
+        // the open was a misread: back to the alarm.
+        if (ev.frame_ts - this.phase_since < 2500 && lid === 'closed' && v.confidence >= 0.8 && !v.hand_on_press) {
+          this.rollbackVotes++;
+          if (this.rollbackVotes >= 2) {
+            this.rollbackVotes = 0;
+            this.log('completion cancelled: the press is still closed');
+            this.setPhase('AWAIT_OPEN', ev.frame_ts);
+          }
+        }
+        break;
+      }
       case 'AWAIT_OPEN': {
         const o = vote('open', this.params.settle_ms);
         if (o.ok) {
           this.log(`open detected: ${o.count} agreeing verdicts over ${ev.frame_ts - o.firstTs} ms (model latency ${Math.round(ev.latency_ms)} ms)`);
           this.setPhase('COMPLETE', ev.frame_ts);
-        }
+        } else this.blocked = why('open', false);
         break;
       }
       default:
@@ -259,8 +319,9 @@ export class PressSession {
 
   snapshot(now = Date.now()): SessionSnapshot {
     const t = TEXT[this.phase];
-    let hint = '';
-    if ((this.phase === 'AWAIT_CLOSE' || this.phase === 'AWAIT_OPEN') && this.lastSeenTs && now - this.lastSeenTs > this.params.lost_after_ms) hint = 'Look at the press';
+    let hint = this.blocked; // the freshest reason wins; the timed hints below cover "nothing seen"
+    if (hint) { /* shown as is */ }
+    else if ((this.phase === 'AWAIT_CLOSE' || this.phase === 'AWAIT_OPEN') && this.lastSeenTs && now - this.lastSeenTs > this.params.lost_after_ms) hint = 'Look at the press';
     else if ((this.phase === 'AWAIT_CLOSE' || this.phase === 'AWAIT_OPEN') && this.farSince && now - this.farSince > 1500) hint = 'Move closer to the press';
     const lv = this.lastVerdict;
     return {
@@ -275,6 +336,7 @@ export class PressSession {
       last_verdict: lv ? { ...lv.verdict, age_ms: now - lv.frame_ts, latency_ms: Math.round(lv.latency_ms), model: lv.model } : null,
       events: this.events.slice(-12),
       streak: { state: this.streakState, count: this.streakCount, span_ms: this.streakLastTs - this.streakFirstTs, hand_free: this.handFreeCount, open_seen: this.openSeen },
+      why: this.blocked,
     };
   }
 }

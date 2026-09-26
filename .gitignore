@@ -26,3 +26,5 @@ open_1.MOV
 close_1.MOV
 open_far.MOV
 closed_far.MOV
+# chat history written by the server
+data/conversations/

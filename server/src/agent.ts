@@ -66,6 +66,15 @@ export function commandIntent(text: string): 'start' | 'stop' | null {
   return null;
 }
 
+/** "New conversation", "start over", "clear the chat"…: begin a fresh conversation (no model call). */
+export function newConversationIntent(text: string): boolean {
+  const t = text.toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return /\b(new|fresh|another|next) (conversation|chat|session|topic)\b/.test(t)
+    || /\b(start|begin) (over|again|fresh|from scratch)\b/.test(t)
+    || /\b(clear|reset|wipe|erase) (the |our |this |my )?(chat|conversation|history|session)\b/.test(t)
+    || /\bforget (everything|all of that|all that)\b/.test(t);
+}
+
 /** Does this message need the camera picture (vision model) rather than just text? */
 export function needsVision(text: string): boolean {
   return /\b(see|seeing|look|looking|view|camera|frame|picture|image|photo|scene|visible|in front|what is this|what's this|describe|open or closed|is it (open|closed)|is the (press|box|lid)|what colou?r|how many|read (the|this)|table|bench)\b/i.test(text);
@@ -73,6 +82,8 @@ export function needsVision(text: string): boolean {
 
 export class Agent {
   history: ChatMessage[] = [];
+  /** Forget the conversation (a new chat session). */
+  reset(): void { this.history = []; }
   models: AgentModels;
   private getContext: () => AgentContext;
   private tools: AgentTools;
@@ -164,7 +175,9 @@ export class Agent {
     for (let round = 0; round < 4; round++) {
       let r;
       try {
-        r = await streamChat(model, messages, { tools: TOOL_DEFS, maxTokens: 900, timeoutMs: 15_000, signal, onDelta: (d) => { text += d; onDelta(replyId, d); } });
+        // The fast vendor normally answers in ~0.1-0.2 s; if it has not started within 3 s, fall back
+        // to the vision model now instead of after the full 15 s timeout.
+        r = await streamChat(model, messages, { tools: TOOL_DEFS, maxTokens: 900, timeoutMs: 15_000, firstByteMs: model !== this.models.vision ? 3_000 : undefined, signal, onDelta: (d) => { text += d; onDelta(replyId, d); } });
       } catch (e) {
         if (signal?.aborted) throw e;
         // fall back to the vision model (OpenAI) if the fast vendor fails
@@ -187,26 +200,46 @@ export class Agent {
     }
     const reply: ChatMessage = { id: replyId, role: 'assistant', text: stripMarkdown(text) || 'Done.', at: Date.now(), model: usedModel, ms: Math.round(performance.now() - t0) };
     this.history.push(reply);
-    if (this.history.length > 60) this.history.splice(0, this.history.length - 60);
+    if (this.history.length > 500) this.history.splice(0, this.history.length - 500); // saved conversation; the model only sees the last 20
     return reply;
   }
 }
 
-/** Speech to text for push-to-talk audio from the glasses or the console (16 kHz mono PCM16 → WAV → OpenAI). */
-export async function transcribePcm16(pcm: Buffer, sampleRate = 16000, model = process.env.STT_MODEL ?? 'gpt-4o-mini-transcribe'): Promise<string> {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key) throw new Error('OPENAI_API_KEY missing');
+/**
+ * Speech to text for push-to-talk audio from the glasses or the console (16 kHz mono PCM16 → WAV).
+ * Groq's whisper-large-v3-turbo is used first when a key is present (measured ~0.25 s for a 3 s
+ * utterance vs ~1.0-1.5 s for OpenAI gpt-4o-mini-transcribe, same transcript); OpenAI is the fallback.
+ * STT_MODEL forces one model (a "groq/" prefix selects Groq).
+ */
+export async function transcribePcm16(pcm: Buffer, sampleRate = 16000, model = process.env.STT_MODEL): Promise<string> {
   const header = Buffer.alloc(44);
   header.write('RIFF', 0); header.writeUInt32LE(36 + pcm.length, 4); header.write('WAVE', 8);
   header.write('fmt ', 12); header.writeUInt32LE(16, 16); header.writeUInt16LE(1, 20); header.writeUInt16LE(1, 22);
   header.writeUInt32LE(sampleRate, 24); header.writeUInt32LE(sampleRate * 2, 28); header.writeUInt16LE(2, 32); header.writeUInt16LE(16, 34);
   header.write('data', 36); header.writeUInt32LE(pcm.length, 40);
-  const form = new FormData();
-  form.append('file', new Blob([Buffer.concat([header, pcm])], { type: 'audio/wav' }), 'speech.wav');
-  form.append('model', model);
-  form.append('language', 'en');
-  const res = await fetch('https://api.openai.com/v1/audio/transcriptions', { method: 'POST', headers: { authorization: `Bearer ${key}` }, body: form, signal: AbortSignal.timeout(20_000) });
-  const body = await res.text();
-  if (!res.ok) throw new Error(`stt HTTP ${res.status}: ${body.slice(0, 200)}`);
-  return String(JSON.parse(body).text ?? '').trim();
+  const wav = new Blob([Buffer.concat([header, pcm])], { type: 'audio/wav' });
+  const plan: { url: string; key: string | undefined; model: string; timeoutMs: number }[] = [];
+  const groq = { url: 'https://api.groq.com/openai/v1/audio/transcriptions', key: process.env.GROQ_API_KEY };
+  const openai = { url: 'https://api.openai.com/v1/audio/transcriptions', key: process.env.OPENAI_API_KEY };
+  if (model?.startsWith('groq/')) plan.push({ ...groq, model: model.slice(5), timeoutMs: 20_000 });
+  else if (model) plan.push({ ...openai, model, timeoutMs: 20_000 });
+  else {
+    if (groq.key) plan.push({ ...groq, model: 'whisper-large-v3-turbo', timeoutMs: 5_000 });
+    plan.push({ ...openai, model: 'gpt-4o-mini-transcribe', timeoutMs: 20_000 });
+  }
+  let lastErr: Error | null = null;
+  for (const p of plan) {
+    if (!p.key) { lastErr = new Error(`no API key for ${p.url}`); continue; }
+    try {
+      const form = new FormData();
+      form.append('file', wav, 'speech.wav');
+      form.append('model', p.model);
+      form.append('language', 'en');
+      const res = await fetch(p.url, { method: 'POST', headers: { authorization: `Bearer ${p.key}` }, body: form, signal: AbortSignal.timeout(p.timeoutMs) });
+      const body = await res.text();
+      if (!res.ok) throw new Error(`stt ${p.model} HTTP ${res.status}: ${body.slice(0, 200)}`);
+      return String(JSON.parse(body).text ?? '').trim();
+    } catch (e) { lastErr = e as Error; }
+  }
+  throw lastErr ?? new Error('speech to text unavailable');
 }

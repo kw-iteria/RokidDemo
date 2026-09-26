@@ -3,6 +3,7 @@
 // no SDK overhead, and remembers per-model which "no thinking" knob each API accepts.
 
 import { RealtimeSession } from './realtime.ts';
+import sharp from 'sharp';
 
 export type LidState = 'open' | 'closed' | 'partial' | 'unknown';
 export type Provider = 'gemini' | 'openai' | 'openai-realtime' | 'compat' | 'moondream';
@@ -212,16 +213,45 @@ async function classifyGemini(model: string, jpeg: Buffer, opts: ClassifyOptions
 }
 
 // ------------------------------- OpenAI -------------------------------------
+// Reference photos are identical on every request: encode them once.
+const dataUrlCache = new WeakMap<Buffer, string>();
+function jpegDataUrl(jpeg: Buffer): string {
+  let url = dataUrlCache.get(jpeg);
+  if (!url) { url = `data:image/jpeg;base64,${jpeg.toString('base64')}`; dataUrlCache.set(jpeg, url); }
+  return url;
+}
+// detail:'low' means OpenAI looks at a <=512 px version anyway, so send exactly that (smaller upload,
+// same pixels for the model). One resize per frame, shared by raced models. An image that already
+// fits (a zoom crop, or a source sending <=512 px frames) goes as is: re-encoding it only cost
+// time and a JPEG generation.
+const lowDetailCache = new WeakMap<Buffer, Promise<string>>();
+function lowDetailDataUrl(jpeg: Buffer): Promise<string> {
+  let p = lowDetailCache.get(jpeg);
+  if (!p) {
+    p = sharp(jpeg).metadata()
+      .then((m) => (m.width ?? 0) <= 512 && (m.height ?? 0) <= 512
+        ? jpegDataUrl(jpeg)
+        : sharp(jpeg).resize({ width: 512, height: 512, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 82 }).toBuffer().then((b) => `data:image/jpeg;base64,${b.toString('base64')}`))
+      .catch(() => jpegDataUrl(jpeg));
+    lowDetailCache.set(jpeg, p);
+  }
+  return p;
+}
+
+// Priority processing (OPENAI_SERVICE_TIER=priority in .env): lower, steadier latency at a higher
+// price; the owner's call, so it is off unless set. Applies to the detector's Responses calls.
+const OPENAI_SERVICE_TIER = process.env.OPENAI_SERVICE_TIER?.trim();
+
 async function classifyOpenAI(model: string, jpeg: Buffer, opts: ClassifyOptions): Promise<ClassifyResult> {
   const key = process.env.OPENAI_API_KEY;
   if (!key) throw new Error('OPENAI_API_KEY missing');
   const content: unknown[] = [{ type: 'input_text', text: opts.prompt ?? DEFAULT_PROMPT }];
   for (const r of opts.refs ?? []) {
     content.push({ type: 'input_text', text: `Reference image, ${r.label}:` });
-    content.push({ type: 'input_image', image_url: `data:image/jpeg;base64,${r.jpeg.toString('base64')}`, detail: 'low' });
+    content.push({ type: 'input_image', image_url: jpegDataUrl(r.jpeg), detail: 'low' });
   }
   if (opts.refs?.length) content.push({ type: 'input_text', text: 'Now the live frame:' });
-  content.push({ type: 'input_image', image_url: `data:image/jpeg;base64,${jpeg.toString('base64')}`, detail: 'low' });
+  content.push({ type: 'input_image', image_url: await lowDetailDataUrl(jpeg), detail: 'low' });
 
   const t0 = performance.now();
   let lastErr = '';
@@ -232,6 +262,11 @@ async function classifyOpenAI(model: string, jpeg: Buffer, opts: ClassifyOptions
       text: { format: { type: 'json_schema', name: 'press_state', schema: JSON_SCHEMA, strict: true } },
       max_output_tokens: 400,
       store: false,
+      // The prompt + reference photos are the same ~1400 tokens on every call; the key routes all
+      // of them to the same cache so the concurrent requests keep hitting it (measured: 1408 of
+      // 1774 input tokens served from cache).
+      prompt_cache_key: 'press-detector',
+      ...(OPENAI_SERVICE_TIER ? { service_tier: OPENAI_SERVICE_TIER } : {}),
       ...(effort ? { reasoning: { effort } } : {}),
     };
     const res = await fetch('https://api.openai.com/v1/responses', {
