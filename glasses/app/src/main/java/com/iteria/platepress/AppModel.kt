@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
+import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -22,6 +23,8 @@ import org.json.JSONObject
 /** Owns the server connection, the HUD state, and the sound reactions to phase changes. */
 /** The computer over the USB cable, via `adb reverse` (see tools/install_glasses.sh). */
 private const val USB_HOST = "127.0.0.1"
+/** The server sends state twice a second; this much silence means the link is dead (short Wi-Fi stalls survive). */
+private const val SILENT_LINK_MS = 5000L
 
 class AppModel(context: Context) {
     private val app = context.applicationContext
@@ -65,6 +68,11 @@ class AppModel(context: Context) {
         scope.launch {
             while (isActive) {
                 delay(2000)
+                if (link.connected && link.silentForMs() > SILENT_LINK_MS) {
+                    Log.w("AppModel", "no word from the server for ${link.silentForMs()} ms: reconnecting")
+                    link.dropSilent()
+                    continue
+                }
                 if (link.connected) {
                     link.ping()
                     link.sendJson(JSONObject().put("t", "status").put("camera", cameraStatus()).put("voice", sounds.voiceEnabled)

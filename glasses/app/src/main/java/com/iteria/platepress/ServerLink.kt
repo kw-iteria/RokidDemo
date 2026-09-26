@@ -23,7 +23,10 @@ class ServerLink(
 ) {
     private val client = OkHttpClient.Builder()
         .socketFactory(NoDelaySocketFactory)   // small messages (interrupt, ping) never wait behind Nagle
-        .pingInterval(2, TimeUnit.SECONDS)     // notice a dead link in ~2-4 s instead of 5-10 s
+        // Protocol pings are only a backstop: OkHttp drops the socket when one pong is late by the whole
+        // interval, and a 2 s interval cut working links on every short Wi-Fi stall. Liveness is judged
+        // by [silentForMs] instead (the server sends state twice a second).
+        .pingInterval(10, TimeUnit.SECONDS)
         .connectTimeout(3, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .build()
@@ -35,7 +38,14 @@ class ServerLink(
     @Volatile private var bestRtt = Long.MAX_VALUE
     @Volatile private var bestRttAt = 0L
     @Volatile var endpoint = ""; private set
+    @Volatile private var lastHeardAt = 0L
     private var seq = 0
+
+    /** Milliseconds since anything arrived from the server on the live socket. */
+    fun silentForMs(): Long = if (connected) System.currentTimeMillis() - lastHeardAt else 0L
+
+    /** The link went quiet for too long: drop it and tell the owner, so the connection loop starts over. */
+    fun dropSilent() { close(); markDown() }
 
     // Every connect() starts a new generation. Callbacks from an older socket (one we already dropped,
     // e.g. a slow attempt to a stale remembered address) must not touch the state: its late
@@ -52,6 +62,7 @@ class ServerLink(
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 if (!current()) { webSocket.close(1000, "superseded"); return }
                 connected = true
+                lastHeardAt = System.currentTimeMillis()
                 val device = JSONObject()
                     .put("model", Build.MODEL).put("manufacturer", Build.MANUFACTURER)
                     .put("sdk", Build.VERSION.SDK_INT).put("app", BuildConfig.VERSION_NAME)
@@ -61,6 +72,7 @@ class ServerLink(
 
             override fun onMessage(webSocket: WebSocket, text: String) {
                 if (!current()) return
+                lastHeardAt = System.currentTimeMillis()
                 try {
                     val j = JSONObject(text)
                     when (j.optString("t")) {
@@ -88,6 +100,7 @@ class ServerLink(
 
             override fun onMessage(webSocket: WebSocket, bytes: okio.ByteString) {
                 if (!current()) return
+                lastHeardAt = System.currentTimeMillis()
                 try {
                     val b = bytes.toByteArray()
                     if (b.size < 4) return

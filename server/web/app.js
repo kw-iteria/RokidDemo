@@ -110,6 +110,9 @@
 
   // ------------------------------------------------------------------ state
   function onState(msg) {
+    // The server was restarted (new build): reload so this page runs the matching code.
+    if (state.boot && msg.boot && msg.boot !== state.boot) { location.reload(); return; }
+    state.boot = msg.boot;
     state.offset = msg.server_now - Date.now();
     state.snap = msg;
     const s = msg.session;

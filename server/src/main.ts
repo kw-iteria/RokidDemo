@@ -27,6 +27,7 @@ loadEnv();
 const ROOT = resolve(import.meta.dirname, '..', '..');
 const WEB = resolve(ROOT, 'server', 'web');
 const PORT = Number(process.env.PORT ?? 8787);
+const BOOT = Date.now(); // in every state message: the console reloads itself when the server was restarted
 const CONFIG_FILE = resolve(ROOT, 'config.local.json');
 const REFS_DIR = resolve(ROOT, 'server', 'refs');
 
@@ -230,6 +231,7 @@ function stateMessage(): string {
   return JSON.stringify({
     t: 'state',
     server_now: now,
+    boot: BOOT,
     session: session.snapshot(now),
     stats: detector.stats(),
     config: { models: config.models, mode: config.mode, maxInflight: config.maxInflight, minIntervalMs: config.minIntervalMs, timeoutMs: config.timeoutMs, source: config.source, params: config.params, camera: config.camera, chatFast: config.chatFast, chatVision: config.chatVision, voice: config.voice },
@@ -557,7 +559,21 @@ const server = http.createServer((req, res) => {
 
 // ----------------------------------------------------------------------------- websockets
 const wss = new WebSocketServer({ server });
+// Liveness: a peer that vanishes without closing (Wi-Fi stall, cable pulled) otherwise stays in the
+// client sets for as long as its TCP socket lingers; a zombie glasses socket kept a stale source and
+// blocked the USB keeper. Three missed pings (9 s) and the socket is dropped, which runs its 'close'.
+interface LiveSocket extends WebSocket { missed?: number }
+setInterval(() => {
+  for (const c of wss.clients as Set<LiveSocket>) {
+    if ((c.missed ?? 0) >= 3) { c.terminate(); continue; }
+    c.missed = (c.missed ?? 0) + 1;
+    c.ping();
+  }
+}, 3000).unref();
 wss.on('connection', (ws, req) => {
+  (ws as LiveSocket).missed = 0;
+  ws.on('pong', () => { (ws as LiveSocket).missed = 0; });
+  ws.on('message', () => { (ws as LiveSocket).missed = 0; }); // any traffic proves the peer is there
   const url = new URL(req.url ?? '/', 'http://x');
   const role = url.pathname.replace(/^\/ws\/?/, '') || 'desktop';
   const remote = req.socket.remoteAddress ?? '?';
@@ -585,6 +601,10 @@ wss.on('connection', (ws, req) => {
   if (role === 'glasses' || role === 'webcam') {
     const id = role === 'glasses' ? `glasses-${remote.replace(/^.*:/, '')}` : `webcam-${Math.random().toString(36).slice(2, 6)}`;
     const src: Source = { id, kind: role, ws, lastFrameAt: 0, frames: [], seq: 0 };
+    // The same glasses coming back (after a Wi-Fi stall the old socket never said goodbye): drop the
+    // old socket now rather than waiting for the heartbeat to notice.
+    const stale = sources.get(id)?.ws;
+    if (stale && stale !== ws) stale.terminate();
     sources.set(id, src);
     if (role === 'glasses') { glassesClients.add(ws); prewarm(); } // webcam senders don't get the console stream (they never read it)
     log('info', `${role} connected from ${remote}`);
@@ -633,7 +653,7 @@ wss.on('connection', (ws, req) => {
         else if (msg.t === 'ping') ws.send(JSON.stringify({ t: 'pong', ts: msg.ts, server_now: Date.now() }));
       } catch { /* ignore */ }
     });
-    ws.on('close', () => { sources.delete(id); glassesClients.delete(ws); desktops.delete(ws); log('info', `${id} disconnected`); broadcastState(); });
+    ws.on('close', () => { if (sources.get(id)?.ws === ws) sources.delete(id); glassesClients.delete(ws); desktops.delete(ws); log('info', `${id} disconnected`); broadcastState(); });
     broadcastState();
     return;
   }
