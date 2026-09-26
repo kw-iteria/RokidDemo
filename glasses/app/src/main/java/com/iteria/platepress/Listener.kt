@@ -152,7 +152,7 @@ class Listener(
     companion object {
         const val TAG = "Listener"
         const val MIN_SPEECH_RMS = 350.0
-        const val END_SILENCE_MS = 700
+        const val END_SILENCE_MS = 500  // owner's call 2026-09-25: -200 ms per turn, accepts more mid-sentence cuts
         const val PARTIAL_SILENCE_MS = 300  // Groq transcribes in ~0.3 s, so the text is ready when END_SILENCE_MS fires
         const val MIN_UTTERANCE_MS = 400
         const val MAX_UTTERANCE_MS = 12_000
