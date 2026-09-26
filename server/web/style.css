@@ -342,7 +342,7 @@ body.page-open main.console, body.page-open .controls { display: none; }
 .pair-wifi-edit button { padding: 6px 12px; }
 .linkish { border: 0; background: transparent; padding: 0 2px; color: #ececec; text-decoration: underline; text-underline-offset: 2px; font-size: 12px; }
 .linkish:hover { background: transparent; color: #fff; }
-@media (min-width: 981px) { .left-col .camera .viewport .pair-code { width: min(calc(100cqh - 150px), calc(100cqw - 60px), 420px); } } /* fits the camera box with its text */
+@media (min-width: 981px) { .left-col .camera .viewport .pair-code { width: min(calc(100cqh - 178px), calc(100cqw - 60px), 420px); } } /* fits the camera box with its text */
 .camera .pair-panel img.pair-code { display: block; height: auto; object-fit: contain; } /* not the live-picture rule */
 .pair-zoom { padding: 0; border: 0; background: transparent; border-radius: 14px; cursor: zoom-in; }
 .pair-zoom:hover { background: transparent; }

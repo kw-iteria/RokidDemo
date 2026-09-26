@@ -119,6 +119,11 @@
     if (els.srcPill) els.srcPill.className = active ? 'pill ok' : idleGlasses ? 'pill warn' : 'pill';
     if (els.srcPill) els.srcPill.title = idleGlasses && idleGlasses.info.camera.error ? idleGlasses.info.camera.error : '';
     document.querySelector('.viewport').classList.toggle('glasses-live', Boolean(active && active.kind === 'glasses'));
+    // Camera gone (cable out, glasses taken off): bring the pairing code back for the next connection.
+    if (!active && $('frame-box').classList.contains('on')) {
+      $('frame-box').classList.remove('on'); els.liveEmpty.style.display = '';
+      document.querySelector('.viewport').classList.remove('has-frame');
+    }
     if (els.modelPill) els.modelPill.textContent = msg.config.mode === 'local' ? `local CLIP · verified by ${msg.config.models[0]}` : msg.config.models.join(msg.config.mode === 'race' ? ' ∥ ' : ' → ');
     if (els.latPill) els.latPill.textContent = msg.stats.p50_ms ? `${msg.stats.p50_ms} ms · ${msg.stats.decisions_per_s}/s` : '— ms';
     els.hosts.textContent = msg.hosts.length ? `glasses find this Mac at ${msg.hosts.map((h) => `${h}:${msg.port}`).join(' or ')}` : '';
