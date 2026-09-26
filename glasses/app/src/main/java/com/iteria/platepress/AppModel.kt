@@ -48,7 +48,7 @@ class AppModel(context: Context) {
         onUtterance = { utt, part, extends, pcm, rate ->
             if (link.connected) { link.sendAudio(pcm, rate, utt, part, if (stagedStt) "final" else "", extends); _state.update { it.copy(thinking = true, chatStreaming = "", heardText = "") } }
         },
-        onSpeech = { speaking -> _state.update { it.copy(speaking = speaking) } },
+        onSpeech = { speaking -> _state.update { it.copy(speaking = speaking) }; link.sendJson(JSONObject().put("t", "speaking").put("on", speaking)) }, // the console mirrors the wave
         isSpeakerBusy = { sounds.isSpeaking() || player.isPlaying() },
     )
     private val wifiJoiner = WifiJoiner(app)

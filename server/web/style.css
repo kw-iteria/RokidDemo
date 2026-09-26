@@ -135,7 +135,25 @@ button, select, input, textarea { font: inherit; color: inherit; }
 .hud .subtitle { position: absolute; left: 5cqw; right: 5cqw; bottom: 9cqw; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 1cqw; }
 .hud .message { font-size: 5.6cqw; font-weight: 500; line-height: 1.15; max-width: 30ch; text-wrap: balance; }
 .hud .sub { font-size: 3.4cqw; color: var(--phosphor-dim); min-height: 1.2em; }
-.hud .hud-chat { font-size: 4cqw; line-height: 1.25; padding: 1.6cqw 3cqw; border: 1px solid var(--phosphor-dim); border-radius: 2cqw; max-width: 44ch; margin-bottom: 1cqw; }
+.hud .hud-chat { font-size: 4cqw; line-height: 1.25; padding: 1.6cqw 3cqw; border: 1px solid var(--phosphor-dim); border-radius: 2cqw; max-width: 44ch; text-align: left; }
+/* the row beside the phase text mirrors the glasses: wave while the wearer talks, small mascot with a
+   bubble or thinking dots, big mascot when idle */
+.hud .hud-row { position: relative; display: flex; align-items: center; justify-content: center; gap: 2cqw; min-height: 0; margin-bottom: 1cqw; }
+.hud .hud-row[data-mode="none"] { display: none; }
+.hud .heard { font-size: 3.6cqw; color: var(--phosphor-dim); margin-bottom: 1.2cqw; max-width: 44ch; }
+.hud .wave { display: none; position: absolute; left: 50%; top: 50%; width: 54cqw; height: 16cqw; transform: translate(-50%, -50%); pointer-events: none; }
+.hud .hud-row[data-mode="wave"] .wave { display: block; }
+.hud .hud-row[data-mode="wave"] .robot { display: block; width: 16cqw; height: 16cqw; position: relative; }
+.hud .hud-row[data-mode="wave"] .wave.front { z-index: 2; }
+.hud .hud-row[data-mode="stream"] .robot, .hud .hud-row[data-mode="think"] .robot, .hud .hud-row[data-mode="chat"] .robot { display: block; width: 10cqw; height: 10cqw; animation: none; }
+.hud .hud-row[data-mode="stream"] .hud-chat, .hud .hud-row[data-mode="chat"] .hud-chat { display: block; }
+.hud .hud-row[data-mode="think"] .robot .eye { animation: glance 1.1s ease-in-out infinite alternate; }
+.hud .dots { display: none; gap: 1.2cqw; padding: 2cqw 3cqw; border: 1px solid var(--phosphor-dim); border-radius: 2cqw; }
+.hud .hud-row[data-mode="think"] .dots { display: flex; }
+.hud .dots i { width: 1.6cqw; height: 1.6cqw; border-radius: 50%; background: var(--phosphor); animation: dot 0.9s linear infinite; }
+.hud .dots i:nth-child(2) { animation-delay: 0.3s; } .hud .dots i:nth-child(3) { animation-delay: 0.6s; }
+@keyframes dot { 0%, 100% { opacity: 0.15; } 50% { opacity: 1; } }
+@keyframes glance { from { transform: translateX(-3.5px); } to { transform: translateX(3.5px); } }
 .hud .reticle { position: absolute; inset: 7cqw; display: none; }
 .hud .reticle i { position: absolute; width: 6cqw; height: 6cqw; border: 2px solid var(--phosphor-dim); }
 .hud .reticle i:nth-child(1) { left: 0; top: 0; border-right: 0; border-bottom: 0; }
@@ -163,7 +181,7 @@ button, select, input, textarea { font: inherit; color: inherit; }
 .hud .robot .fill { fill: var(--phosphor); stroke: none; }
 .hud .robot .plate { fill: #050605; stroke: none; }
 .hud .robot .eye { animation: blink 3.4s linear infinite; transform-origin: center; transform-box: fill-box; }
-.hud[data-phase="IDLE"] .robot { display: block; }
+.hud .hud-row[data-mode="idle"] .robot { display: block; }
 @keyframes bob { from { transform: translateY(0); } to { transform: translateY(-2px); } }
 @keyframes blink { 0%, 92%, 100% { transform: scaleY(1); } 95% { transform: scaleY(0.1); } }
 

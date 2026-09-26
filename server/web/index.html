@@ -192,15 +192,23 @@
           <div id="hud-check" class="check"><svg viewBox="0 0 64 64"><path d="M14 34 L27 47 L50 20"/></svg></div>
         </div>
         <div class="subtitle">
-          <svg class="robot" viewBox="0 0 100 100" aria-hidden="true">
-            <line x1="50" y1="20" x2="50" y2="9" /><circle cx="50" cy="7.5" r="5.5" class="fill antenna" />
-            <rect x="37" y="17" width="26" height="10" rx="3.5" class="fill" />
-            <rect x="10" y="23" width="80" height="66" rx="30" ry="30" class="fill" />
-            <rect x="0" y="45" width="11" height="24" rx="3.5" class="fill" /><rect x="89" y="45" width="11" height="24" rx="3.5" class="fill" />
-            <rect x="19" y="33" width="62" height="45" rx="24" ry="26" class="plate" />
-            <ellipse cx="40" cy="55.5" rx="4.5" ry="8" class="fill eye" /><ellipse cx="60" cy="55.5" rx="4.5" ry="8" class="fill eye" />
-          </svg>
-          <div id="hud-chat" class="hud-chat" hidden></div>
+          <div id="hud-heard" class="heard" hidden></div>
+          <!-- what the glasses draw beside the phase text: the listening wave, the mascot with a bubble
+               or thinking dots, or the big idle mascot (same priority as the glasses' Subtitle) -->
+          <div id="hud-row" class="hud-row" data-mode="none">
+            <canvas id="hud-wave-back" class="wave back" width="340" height="100" aria-hidden="true"></canvas>
+            <svg class="robot" viewBox="0 0 100 100" aria-hidden="true">
+              <line x1="50" y1="20" x2="50" y2="9" /><circle cx="50" cy="7.5" r="5.5" class="fill antenna" />
+              <rect x="37" y="17" width="26" height="10" rx="3.5" class="fill" />
+              <rect x="10" y="23" width="80" height="66" rx="30" ry="30" class="fill" />
+              <rect x="0" y="45" width="11" height="24" rx="3.5" class="fill" /><rect x="89" y="45" width="11" height="24" rx="3.5" class="fill" />
+              <rect x="19" y="33" width="62" height="45" rx="24" ry="26" class="plate" />
+              <ellipse cx="40" cy="55.5" rx="4.5" ry="8" class="fill eye" /><ellipse cx="60" cy="55.5" rx="4.5" ry="8" class="fill eye" />
+            </svg>
+            <canvas id="hud-wave-front" class="wave front" width="340" height="100" aria-hidden="true"></canvas>
+            <div id="hud-chat" class="hud-chat" hidden></div>
+            <div class="dots" aria-hidden="true"><i></i><i></i><i></i></div>
+          </div>
           <div id="hud-message" class="message">Ready</div>
           <div id="hud-sub" class="sub"></div>
         </div>

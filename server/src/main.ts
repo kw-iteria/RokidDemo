@@ -120,6 +120,21 @@ let liveDirReady = existsSync(LIVE_DIR);
 let lastRelayAt = 0;
 function cameraMessage(): string { return JSON.stringify({ t: 'camera', ...config.camera }); }
 const logLines: { at: number; level: string; text: string }[] = [];
+// What the glasses draw beside the phase text, carried in every state message so a console that
+// connects later (or reloads) mirrors it too: the wearer talking, waiting for the assistant, the
+// reply streaming in, what was heard and the last reply.
+const wearer = { speaking: false, at: 0 };
+let hudThinking = false;
+let hudStream = '';
+function thinking(on: boolean, stt = false): void {
+  hudThinking = on; hudStream = '';
+  broadcast(JSON.stringify({ t: 'chat.thinking', on, ...(stt ? { stt: true } : {}) }));
+}
+function hudState(now: number): unknown {
+  const h = agent.history;
+  const last = (role: 'user' | 'assistant') => { for (let i = h.length - 1; i >= 0; i--) if (h[i].role === role) return { text: h[i].text, at: h[i].at }; return null; };
+  return { speaking: wearer.speaking && now - wearer.at < 20_000, thinking: hudThinking, stream: hudStream, heard: last('user'), chat: last('assistant') };
+}
 
 function log(level: 'info' | 'warn' | 'error', text: string): void {
   const line = { at: Date.now(), level, text };
@@ -242,6 +257,7 @@ function stateMessage(): string {
     t: 'state',
     server_now: now,
     boot: BOOT,
+    hud: hudState(now),
     session: session.snapshot(now),
     stats: detector.stats(),
     config: { models: config.models, mode: config.mode, maxInflight: config.maxInflight, minIntervalMs: config.minIntervalMs, timeoutMs: config.timeoutMs, source: config.source, params: config.params, camera: config.camera, chatFast: config.chatFast, chatVision: config.chatVision, voice: config.voice },
@@ -317,7 +333,7 @@ function switchConversation(from: string): void {
   agent.history = convos.current.messages;
   broadcast(JSON.stringify({ t: 'chat.reset', from }));
   broadcast(JSON.stringify({ t: 'chat.history', messages: convos.current.messages }));
-  broadcast(JSON.stringify({ t: 'chat.thinking', on: false }));
+  thinking(false);
   broadcastDesktops(conversationsMessage());
 }
 function openConversation(id: string, from: string): void {
@@ -354,7 +370,7 @@ async function handleChat(text: string, from: string): Promise<void> {
   const ac = new AbortController();
   chatInflight = ac;
   if (currentSpeaker) { currentSpeaker.cancel(); currentSpeaker = null; }
-  broadcast(JSON.stringify({ t: 'chat.thinking', on: true }));
+  thinking(true);
   const t0 = Date.now();
   const speaker = config.voice.enabled ? new Speaker(`s${Date.now()}`, config.voice, (buf) => broadcast(buf), (e) => log('warn', `tts: ${e}`)) : null;
   currentSpeaker = speaker;
@@ -362,7 +378,7 @@ async function handleChat(text: string, from: string): Promise<void> {
   try {
     const reply = await agent.chat(
       clean, from,
-      (id, delta) => { broadcast(JSON.stringify({ t: 'chat.delta', id, delta })); speaker?.push(delta); },
+      (id, delta) => { hudStream += delta; broadcast(JSON.stringify({ t: 'chat.delta', id, delta })); speaker?.push(delta); },
       (e) => { if (e.type === 'tool') log('info', `agent tool ${e.name}: ${e.result}`); else log('info', `chat model ${e.model}${e.vision ? ' (with camera frame)' : ''}`); },
       ac.signal,
     );
@@ -376,7 +392,7 @@ async function handleChat(text: string, from: string): Promise<void> {
     log('error', `chat failed after ${Date.now() - t0} ms: ${msg}`);
     broadcast(JSON.stringify({ t: 'chat', id: `a${Date.now()}`, role: 'assistant', text: `Sorry, the assistant failed: ${msg.slice(0, 120)}`, at: Date.now() }));
   } finally {
-    if (chatInflight === ac) { chatInflight = null; broadcast(JSON.stringify({ t: 'chat.thinking', on: false })); }
+    if (chatInflight === ac) { chatInflight = null; thinking(false); }
     convos.save();
     broadcastDesktops(conversationsMessage());
     broadcastState();
@@ -406,7 +422,7 @@ async function handleAudio(pcm: Buffer, from: string, h: AudioHeader): Promise<v
   const p = sttPending.get(key);
   sttPending.delete(key);
   const ahead = Boolean(p && p.part === Number(h.part ?? 0));
-  broadcast(JSON.stringify({ t: 'chat.thinking', on: true, stt: true }));
+  thinking(true, true);
   try {
     let text: string;
     if (ahead && h.extends) {
@@ -418,7 +434,7 @@ async function handleAudio(pcm: Buffer, from: string, h: AudioHeader): Promise<v
   } catch (e) {
     log('error', `speech to text failed: ${(e as Error).message}`);
   } finally {
-    broadcast(JSON.stringify({ t: 'chat.thinking', on: false }));
+    thinking(false);
   }
 }
 
@@ -646,10 +662,11 @@ wss.on('connection', (ws, req) => {
             greeter.end("Hi! I'm listening. Just talk to me.");
           }
         }
-        else if (msg.t === 'interrupt') { if (chatInflight) chatInflight.abort(); if (currentSpeaker) { currentSpeaker.cancel(); currentSpeaker = null; } broadcast(JSON.stringify({ t: 'chat.thinking', on: false })); log('info', `${id}: interrupted`); }
+        else if (msg.t === 'interrupt') { if (chatInflight) chatInflight.abort(); if (currentSpeaker) { currentSpeaker.cancel(); currentSpeaker = null; } thinking(false); log('info', `${id}: interrupted`); }
         else if (msg.t === 'gesture') { session.gesture(String(msg.name)); log('info', `gesture ${msg.name} from ${id}`); }
         else if (msg.t === 'chat') void handleChat(String(msg.text ?? ''), id);
         else if (msg.t === 'new_chat') newConversation(id, role === 'glasses');
+        else if (msg.t === 'speaking') { wearer.speaking = Boolean(msg.on); wearer.at = Date.now(); broadcastDesktops(JSON.stringify({ t: 'speaking', on: wearer.speaking, from: id })); } // the console mirrors the listening wave
         else if (msg.t === 'status') {
           const prevCam = JSON.stringify((src.info as { camera?: unknown } | undefined)?.camera ?? null);
           const prevMic = JSON.stringify((src.info as { mic?: unknown } | undefined)?.mic ?? null);

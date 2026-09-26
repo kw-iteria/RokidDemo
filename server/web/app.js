@@ -5,7 +5,7 @@
   const els = {
     conn: $('conn'), srcPill: $('src-pill'), modelPill: $('model-pill'), latPill: $('lat-pill'),
     live: $('live'), liveEmpty: $('live-empty'), badge: $('verdict-badge'),
-    hud: $('hud'), arc: $('dial-arc'), number: $('hud-number'), message: $('hud-message'), sub: $('hud-sub'),
+    hud: $('hud'), arc: $('dial-arc'), number: $('hud-number'), message: $('hud-message'), sub: $('hud-sub'), hudRow: $('hud-row'), heard: $('hud-heard'), waveBack: $('hud-wave-back'), waveFront: $('hud-wave-front'),
     footL: $('hud-foot-left'), footR: $('hud-foot-right'), timing: $('timing'),
     source: $('source'), model: $('model'), model2: $('model2'), mode: $('mode'), inflight: $('inflight'), interval: $('interval'),
     confirm: $('confirm'), dwell: $('dwell'), settle: $('settle'), handfree: $('handfree'), hosts: $('hosts'), log: $('log'),
@@ -14,7 +14,7 @@
     chatFast: $('chat-fast'), chatVision: $('chat-vision'), voiceName: $('voice-name'), voiceSpeed: $('voice-speed'), voiceEnabled: $('voice-enabled'),
     chatLog: $('chat-log'), chatForm: $('chat-form'), chatInput: $('chat-input'), mic: $('btn-mic'), hudChat: $('hud-chat'),
   };
-  const state = { snap: null, offset: 0, verdicts: [], lastFrameUrl: null, sound: true, voice: true, lastPhase: null, lastBeep: 0, defaultPrompt: '', bench: null, editing: false };
+  const state = { hud: { speaking: false, speakingAt: 0, thinking: false, stream: '', heard: null }, snap: null, offset: 0, verdicts: [], lastFrameUrl: null, sound: true, voice: true, lastPhase: null, lastBeep: 0, defaultPrompt: '', bench: null, editing: false };
 
   // ------------------------------------------------------------------ websocket
   let ws = null;
@@ -32,10 +32,11 @@
       else if (msg.t === 'log') addLog(msg);
       else if (msg.t === 'log.history') { els.log.replaceChildren(); for (const l of msg.lines) addLog(l); }
       else if (msg.t === 'chat') addChat(msg, true);
-      else if (msg.t === 'chat.delta') addDelta(msg);
+      else if (msg.t === 'chat.delta') { addDelta(msg); state.hud.stream += msg.delta; }
+      else if (msg.t === 'speaking') { state.hud.speaking = Boolean(msg.on); state.hud.speakingAt = Date.now(); } // the wearer is talking (glasses' voice detector)
       else if (msg.t === 'chat.history') { els.chatLog.querySelectorAll('li:not(.hint)').forEach((n) => n.remove()); state.hudChat = null; for (const m of msg.messages) addChat(m, false); scrollSoon(els.chatLog); }
       else if (msg.t === 'conversations') renderConversations(msg);
-      else if (msg.t === 'chat.thinking') { if (msg.on) showThinking(msg.stt ? 'transcribing' : ''); else if (!document.querySelector('.chat-log li.streaming')) hideThinking(); }
+      else if (msg.t === 'chat.thinking') { state.hud.thinking = Boolean(msg.on); if (msg.on) showThinking(msg.stt ? 'transcribing' : ''); else if (!document.querySelector('.chat-log li.streaming')) hideThinking(); }
     };
   }
   function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
@@ -114,6 +115,13 @@
     if (state.boot && msg.boot && msg.boot !== state.boot) { location.reload(); return; }
     state.boot = msg.boot;
     state.offset = msg.server_now - Date.now();
+    if (msg.hud) { // the glasses' overlay state (wave, thinking, streaming reply, heard, last reply)
+      const h = state.hud;
+      h.speaking = Boolean(msg.hud.speaking); if (h.speaking) h.speakingAt = Date.now();
+      h.thinking = Boolean(msg.hud.thinking); h.stream = msg.hud.stream || '';
+      if (msg.hud.heard) h.heard = { text: msg.hud.heard.text, at: msg.hud.heard.at - state.offset };
+      if (msg.hud.chat) state.hudChat = { text: msg.hud.chat.text, at: msg.hud.chat.at - state.offset };
+    }
     state.snap = msg;
     const s = msg.session;
     const active = msg.sources.find((x) => x.active);
@@ -194,9 +202,42 @@
     } else {
       put(els.number, 'number', '', text);
     }
-    const fresh = Boolean(state.hudChat && Date.now() - state.hudChat.at < 12_000);
-    put(els.hudChat, 'hudChatHidden', !fresh, (el, v) => { el.hidden = v; });
-    if (fresh) put(els.hudChat, 'hudChat', state.hudChat.text, text);
+    // The row beside the text, in the glasses' own priority: talking → wave; reply streaming → bubble;
+    // waiting → thinking dots; a fresh reply → bubble; otherwise the big mascot when idle.
+    const h = state.hud;
+    const now = Date.now();
+    const speaking = h.speaking && now - h.speakingAt < 20_000;
+    const chatFresh = Boolean(state.hudChat && now - state.hudChat.at < 12_000);
+    const heardFresh = Boolean(h.heard && now - h.heard.at < 6_000);
+    const mode = speaking ? 'wave' : h.stream ? 'stream' : h.thinking ? 'think' : chatFresh ? 'chat' : s.phase === 'IDLE' ? 'idle' : 'none';
+    put(els.hudRow, 'mode', mode, (el, v) => { el.dataset.mode = v; });
+    put(els.heard, 'heard', heardFresh && (h.thinking || h.stream) ? `\u201c${h.heard.text}\u201d` : '', (el, v) => { el.hidden = !v; el.textContent = v; });
+    const bubble = mode === 'stream' ? h.stream : mode === 'chat' ? state.hudChat.text : '';
+    put(els.hudChat, 'hudChat', bubble, (el, v) => { el.hidden = !v; el.textContent = v; });
+    if (mode === 'wave') { const t = (now % 1300) / 1300; drawWave(els.waveBack, t, 0.55, null); drawWave(els.waveFront, t, 1, [141, 35, 58, 41]); }
+  }
+  // Same packet as the glasses draw (Hud.kt soundWave): a gaussian-windowed sine sweeping left to right,
+  // drawn once behind the mascot and once clipped to its face plate so it reads as passing through.
+  let waveColor = '';
+  function drawWave(c, t, alpha, clip) {
+    const ctx = c.getContext('2d');
+    if (!waveColor) waveColor = getComputedStyle(els.hud).getPropertyValue('--phosphor').trim() || '#8cf5b6';
+    const w = c.width, hh = c.height;
+    ctx.clearRect(0, 0, w, hh);
+    ctx.save();
+    if (clip) { ctx.beginPath(); ctx.rect(clip[0], clip[1], clip[2], clip[3]); ctx.clip(); }
+    const cy = hh * 0.555, centre = -0.25 * w + t * 1.5 * w, sigma = w * 0.16, k = 2 * Math.PI / (hh * 0.42);
+    ctx.lineCap = 'round'; ctx.lineWidth = hh * 0.035; ctx.strokeStyle = waveColor;
+    let px = 0, py = cy;
+    for (let i = 0; i <= 120; i++) {
+      const x = w * i / 120;
+      const d = (x - centre) / sigma;
+      const env = Math.exp(-d * d);
+      const y = cy + env * hh * 0.2 * Math.sin(k * x - t * 18);
+      if (i > 0 && env > 0.02) { ctx.globalAlpha = alpha * Math.min(1, env * 1.6); ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(x, y); ctx.stroke(); }
+      px = x; py = y;
+    }
+    ctx.restore();
   }
   function loop() { renderHud(); requestAnimationFrame(loop); }
   requestAnimationFrame(loop);
@@ -468,7 +509,8 @@
     if (!li.parentNode) els.chatLog.appendChild(li);
     if (m.role === 'user' && fresh) showThinking('');
     scrollSoon(els.chatLog);
-    if (m.role === 'assistant' && fresh) { state.hudChat = { text: m.text, at: Date.now() }; }
+    if (m.role === 'assistant' && fresh) { state.hudChat = { text: m.text, at: Date.now() }; state.hud.stream = ''; state.hud.thinking = false; }
+    if (m.role === 'user' && fresh) state.hud.heard = { text: m.text, at: Date.now() }; // the glasses show what they understood while the reply is on its way
   }
   els.chatForm.addEventListener('submit', (e) => {
     e.preventDefault();
