@@ -30,6 +30,7 @@ class AppModel(context: Context) {
     private val prefs = app.getSharedPreferences("platepress", Context.MODE_PRIVATE)
     val player = VoicePlayer()
     @Volatile private var serverVoice = true   // replies spoken by the server's neural voice (else device TTS)
+    @Volatile private var stagedStt = false    // the server takes the two-step utterance hand-over (an older one would answer the partial)
     val link = ServerLink(
         onStateJson = ::onServerState,
         onConnection = { up, endpoint -> _state.update { it.copy(connected = up, host = endpoint, phase = if (up) it.phase else "CONNECTING") } },
@@ -37,9 +38,9 @@ class AppModel(context: Context) {
         onBinary = { header, body -> if (header.optString("t") == "tts" && sounds.voiceEnabled) player.enqueue(header.optString("id"), header.optInt("rate", 24_000), body, header.optBoolean("stop"), header.optBoolean("last")) },
     )
     private val listener = Listener(
-        onPartial = { utt, part, pcm, rate -> link.connected && link.sendAudio(pcm, rate, utt, part, "partial") },
+        onPartial = { utt, part, pcm, rate -> stagedStt && link.connected && link.sendAudio(pcm, rate, utt, part, "partial") },
         onUtterance = { utt, part, extends, pcm, rate ->
-            if (link.connected) { link.sendAudio(pcm, rate, utt, part, "final", extends); _state.update { it.copy(thinking = true, chatStreaming = "", heardText = "") } }
+            if (link.connected) { link.sendAudio(pcm, rate, utt, part, if (stagedStt) "final" else "", extends); _state.update { it.copy(thinking = true, chatStreaming = "", heardText = "") } }
         },
         onSpeech = { speaking -> _state.update { it.copy(speaking = speaking) } },
         isSpeakerBusy = { sounds.isSpeaking() || player.isPlaying() },
@@ -161,7 +162,7 @@ class AppModel(context: Context) {
             "chat.delta" -> _state.update { it.copy(chatStreaming = it.chatStreaming + j.optString("delta"), thinking = true) }
             "chat.thinking" -> _state.update { it.copy(thinking = j.optBoolean("on") || it.chatStreaming.isNotEmpty()) }
             "camera" -> applyCamera(j)
-            "voice" -> serverVoice = j.optString("mode") == "server"
+            "voice" -> { serverVoice = j.optString("mode") == "server"; stagedStt = j.optString("stt") == "staged" }
         }
     }
 

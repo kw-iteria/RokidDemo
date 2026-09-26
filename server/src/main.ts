@@ -165,10 +165,11 @@ function onFrame(source: Source, frame: Frame): void {
 detector.onVerdict = (v) => {
   const motion = typeof v.frame.header.motion === 'number' ? v.frame.header.motion : 0;
   if (!v.model.startsWith('local')) collectLiveLabel(v);
-  recentVerdicts.push({ at: v.frame.recv_ts, phase: session.phase, ...v.verdict, motion: +motion.toFixed(3), box_area: +(v.box_area ?? 0).toFixed(3), seen_area: +(v.seen_area ?? 0).toFixed(3), zoomed: Boolean(v.zoomed), latency_ms: Math.round(v.latency_ms), model: v.model, seq: v.frame.header.seq });
+  const phase = session.phase; // the phase this verdict was judged in
+  session.onVerdict({ verdict: v.verdict, frame_ts: v.frame.recv_ts, latency_ms: v.latency_ms, model: v.model, seq: v.frame.header.seq, motion, box_area: v.seen_area });
+  recentVerdicts.push({ at: v.frame.recv_ts, phase, ...v.verdict, motion: +motion.toFixed(3), box_area: +(v.box_area ?? 0).toFixed(3), seen_area: +(v.seen_area ?? 0).toFixed(3), zoomed: Boolean(v.zoomed), latency_ms: Math.round(v.latency_ms), model: v.model, seq: v.frame.header.seq, why: session.blocked });
   judgedFrames.push(v.frame.jpeg);
   if (recentVerdicts.length > 150) { recentVerdicts.shift(); judgedFrames.shift(); }
-  session.onVerdict({ verdict: v.verdict, frame_ts: v.frame.recv_ts, latency_ms: v.latency_ms, model: v.model, seq: v.frame.header.seq, motion, box_area: v.seen_area });
   broadcastDesktops(JSON.stringify({ t: 'verdict', ...v.verdict, motion: +motion.toFixed(3), box_area: +(v.box_area ?? 0).toFixed(3), zoomed: Boolean(v.zoomed), latency_ms: Math.round(v.latency_ms), model: v.model, seq: v.frame.header.seq, frame_ts: v.frame.recv_ts, server_now: Date.now(), why: session.blocked }));
 };
 detector.onError = (model, err) => log('warn', `model error (${model}): ${err.slice(0, 200)}`);
@@ -245,7 +246,8 @@ function broadcast(msg: string | Buffer): void {
 function broadcastDesktops(msg: string): void {
   for (const ws of desktops) if (ws.readyState === WebSocket.OPEN) ws.send(msg);
 }
-function voiceMessage(): string { return JSON.stringify({ t: 'voice', mode: config.voice.enabled ? 'server' : 'device', voice: config.voice.voice }); }
+// `stt: 'staged'` tells the glasses this server understands the two-step utterance hand-over (handleAudio).
+function voiceMessage(): string { return JSON.stringify({ t: 'voice', mode: config.voice.enabled ? 'server' : 'device', voice: config.voice.voice, stt: 'staged' }); }
 function broadcastState(): void { broadcast(stateMessage()); }
 
 // ----------------------------------------------------------------------------- replay
