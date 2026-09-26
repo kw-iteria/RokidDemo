@@ -28,3 +28,5 @@ open_far.MOV
 closed_far.MOV
 # chat history written by the server
 data/conversations/
+# per-run diagnostics written by the server (verdicts, phase changes, lags)
+data/runs/

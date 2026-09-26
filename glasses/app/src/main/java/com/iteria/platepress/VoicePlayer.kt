@@ -31,6 +31,8 @@ class VoicePlayer {
     @Volatile private var currentId = ""
     @Volatile private var cancelledId = ""
     @Volatile private var playedUntil = 0L
+    @Volatile private var lastProgressAt = 0L   // last successful write: a queue that stops draining must not mute the mic
+    @Volatile var stalls = 0; private set
 
     init { thread(name = "voice-player", isDaemon = true) { loop() } }
 
@@ -44,7 +46,12 @@ class VoicePlayer {
     }
 
     /** True while speech is (probably) coming out of the speaker, so the microphone ignores it. */
-    fun isPlaying(): Boolean = queue.any { !it.end && it.gen == generation } || System.currentTimeMillis() < playedUntil + 350
+    fun isPlaying(): Boolean {
+        val now = System.currentTimeMillis()
+        val queued = queue.any { !it.end && it.gen == generation }
+        // A queue that has not drained for 2 s is a stalled track, not speech: never hold the microphone on it.
+        return (queued && now - lastProgressAt < 2000) || now < playedUntil + 350
+    }
 
     /** Drops everything queued or playing (new reply, interrupt, voice switched off). */
     fun flush() {
@@ -96,10 +103,19 @@ class VoicePlayer {
                 if (t.playState != AudioTrack.PLAYSTATE_PLAYING) t.play()
                 val slice = item.rate * 2 * 20 / 1000            // 20 ms: a flush interrupts within one slice
                 var off = 0
+                var stalledSince = 0L
                 while (off < item.pcm.size && item.gen == generation) {
-                    val n = t.write(item.pcm, off, minOf(slice, item.pcm.size - off)) // blocks while the buffer is full
-                    if (n <= 0) break
-                    off += n
+                    // Non-blocking: a blocking write on a track that stopped consuming (audio focus lost, HAL hiccup)
+                    // hung this thread for good once, and with the queue never draining the microphone stayed muted.
+                    val n = t.write(item.pcm, off, minOf(slice, item.pcm.size - off), AudioTrack.WRITE_NON_BLOCKING)
+                    if (n < 0) throw IllegalStateException("write returned $n")
+                    if (n == 0) {
+                        val now = System.currentTimeMillis()
+                        if (stalledSince == 0L) stalledSince = now
+                        else if (now - stalledSince > 1500) { stalls++; Log.w(TAG, "track stalled; recreating"); throw IllegalStateException("stalled") }
+                        Thread.sleep(5); continue
+                    }
+                    stalledSince = 0L; off += n; lastProgressAt = System.currentTimeMillis()
                 }
                 val ms = off * 1000L / (item.rate * 2)
                 playedUntil = maxOf(playedUntil, System.currentTimeMillis()) + ms

@@ -32,7 +32,10 @@ class Sounds(context: Context) {
         if (voiceEnabled && ttsReady) { lastSpokeAt = System.currentTimeMillis(); tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "pp-${System.nanoTime()}") }
     }
     /** True while the speaker is (probably) playing our own voice, so the microphone ignores it. */
-    fun isSpeaking(): Boolean = try { ttsReady && (tts.isSpeaking || System.currentTimeMillis() - lastSpokeAt < 400) } catch (_: Exception) { false }
+    fun isSpeaking(): Boolean = try {
+        val since = System.currentTimeMillis() - lastSpokeAt
+        ttsReady && (since < 400 || (tts.isSpeaking && since < 10_000)) // prompts are short: a stuck isSpeaking must not hold the mic
+    } catch (_: Exception) { false }
 
     fun release() {
         tone?.release()

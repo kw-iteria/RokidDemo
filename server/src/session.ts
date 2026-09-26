@@ -199,8 +199,11 @@ export class PressSession {
       this.window.sort((a, b) => a.ts - b.ts);
       const keepFrom = Math.max(ev.frame_ts, this.lastAcceptedFrameTs) - (VOTE_LOOKBACK_MS + Math.max(this.params.settle_ms, 2500)); // longest vote plus margin
       this.window = this.window.filter((w) => w.ts >= keepFrom);
-      if (lid === 'open' && !far) this.openSeen++;
     }
+    // Any open reading (moving frames included) proves the press was open during this run; a head-mounted
+    // camera moves most of the time the wearer is busy, and counting only still frames once held a
+    // countdown back by 5 s while the wearer's head settled.
+    if (lid === 'open' && !far) this.openSeen++;
     const visibleState = v.press_visible && v.confidence >= 0.5 ? 'visible' : 'none';
     if (this.visibleStreakState === visibleState) this.visibleStreakCount++;
     else { this.visibleStreakState = visibleState; this.visibleStreakCount = 1; }
@@ -226,7 +229,10 @@ export class PressSession {
       // workflow then move on the same verdict); COUNTDOWN / COMPLETE verify and roll back if needed.
       const quickN = Math.max(1, Math.min(this.params.confirmations, this.params.quick_confirmations ?? this.params.confirmations));
       const tail = run.slice(-quickN);
-      const quick = allowQuick && tail.length === quickN && tail.every((w) => w.lid === state && !w.far && (w.conf ?? 0) >= (this.params.quick_min_confidence ?? 1.01));
+      // ...but never on a single verdict that directly follows the opposite state: a lone misread among
+      // "open" frames started a countdown that the next frames then cancelled (seen in a live run). A
+      // real change of state shows a partial or a second agreeing verdict first.
+      const quick = allowQuick && run.length > quickN && tail.length === quickN && tail.every((w) => w.lid === state && !w.far && (w.conf ?? 0) >= (this.params.quick_min_confidence ?? 1.01));
       const confirming = quick ? tail : agree.slice(-this.params.confirmations);
       const firstAgree = agree[0]?.ts ?? 0;
       const handFree = confirming.length > 0 && confirming.every((w) => !w.hand);
@@ -254,7 +260,7 @@ export class PressSession {
         const c = vote('closed', this.params.settle_ms);
         const longClosed = vote('closed', 2500, false); // genuinely closed for a while: no fast path here
         // a close counts once the press was seen open this run (or has been closed for a while anyway)
-        const seenOpen = this.openSeen >= Math.min(this.params.confirmations, 2) || longClosed.ok;
+        const seenOpen = this.openSeen >= 1 || longClosed.ok;
         const letGo = this.params.hand_free_close && !c.handFree && !longClosed.ok;
         if (c.ok && seenOpen && !letGo) {
           const started_at = this.params.backdate ? c.firstTs : Date.now();

@@ -33,6 +33,7 @@ class Listener(
     @Volatile var noiseFloor = 0.0; private set
     @Volatile var lastPeak = 0.0; private set
     @Volatile var utterances = 0; private set
+    @Volatile var mutedDrops = 0; private set   // utterances thrown away because our own voice was (thought to be) playing
     @Volatile var restartRequested = false
     /** Set by a temple tap: forget the recent speaker activity so the wearer can talk immediately. */
     @Volatile var clearEchoGuard = false
@@ -131,6 +132,7 @@ class Listener(
                 if (done) {
                     inSpeech = false; speechMs = 0
                     onSpeech(false)
+                    if (muted && utteranceMs - silenceMs >= MIN_UTTERANCE_MS) mutedDrops++ // spoke while our own voice was (thought to be) playing
                     if (utteranceMs - silenceMs >= MIN_UTTERANCE_MS && !muted) {
                         utterances++
                         val all = out.toByteArray()

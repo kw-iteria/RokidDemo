@@ -77,7 +77,7 @@ class AppModel(context: Context) {
                     link.ping()
                     link.sendJson(JSONObject().put("t", "status").put("camera", cameraStatus()).put("voice", sounds.voiceEnabled)
                         .put("mic", JSONObject().put("enabled", listener.enabled).put("running", listener.running).put("source", listener.source)
-                            .put("noise", listener.noiseFloor.toInt()).put("peak", listener.lastPeak.toInt()).put("utterances", listener.utterances)))
+                            .put("noise", listener.noiseFloor.toInt()).put("peak", listener.lastPeak.toInt()).put("utterances", listener.utterances).put("muted_drops", listener.mutedDrops)))
                 }
             }
         }

@@ -15,6 +15,7 @@ import { PressSession, DEFAULT_PARAMS, type SessionParams } from './session.ts';
 import { Detector } from './detector.ts';
 import { startReplay } from './replay.ts';
 import { keepUsbForward } from './usb.ts';
+import { RunRecorder } from './runlog.ts';
 import { startBeacon, lanAddresses } from './beacon.ts';
 import { CANDIDATE_MODELS, DEFAULT_PROMPT } from './vision.ts';
 import { Agent, newConversationIntent, transcribePcm16, type ChatMessage } from './agent.ts';
@@ -93,6 +94,8 @@ const judgedFrames: Buffer[] = [];
 // Confident cloud verdicts on real glasses frames become training data for the local classifier (data/live).
 const LIVE_DIR = process.env.LIVE_LABELS_DIR ?? resolve(ROOT, 'data', 'live'); // override for test instances
 let lastLiveSave = 0;
+// Every run's verdicts, phase changes and lags go to data/runs (RUNS_DIR override for test instances).
+const runlog = new RunRecorder(process.env.RUNS_DIR ?? resolve(ROOT, 'data', 'runs'), () => ({ params: config.params, camera: config.camera, models: config.models, mode: config.mode, maxInflight: config.maxInflight }));
 let lastCloudLid: { lid: string; at: number } | null = null;
 function collectLiveLabel(v: { verdict: { press_visible: boolean; lid: string; confidence: number; bbox?: number[] }; frame: Frame; model: string }): void {
   const src = v.frame.header.src ?? '';
@@ -169,6 +172,7 @@ detector.onVerdict = (v) => {
   if (!v.model.startsWith('local')) collectLiveLabel(v);
   const phase = session.phase; // the phase this verdict was judged in
   session.onVerdict({ verdict: v.verdict, frame_ts: v.frame.recv_ts, latency_ms: v.latency_ms, model: v.model, seq: v.frame.header.seq, motion, box_area: v.seen_area });
+  runlog.verdict({ at: v.frame.recv_ts, latency_ms: Math.round(v.latency_ms), model: v.model, phase, lid: v.verdict.lid, press_visible: v.verdict.press_visible, confidence: v.verdict.confidence, hand: Boolean(v.verdict.hand_on_press), motion: +motion.toFixed(3), box_area: +(v.seen_area ?? 0).toFixed(3), why: session.blocked });
   recentVerdicts.push({ at: v.frame.recv_ts, phase, ...v.verdict, motion: +motion.toFixed(3), box_area: +(v.box_area ?? 0).toFixed(3), seen_area: +(v.seen_area ?? 0).toFixed(3), zoomed: Boolean(v.zoomed), latency_ms: Math.round(v.latency_ms), model: v.model, seq: v.frame.header.seq, why: session.blocked });
   judgedFrames.push(v.frame.jpeg);
   if (recentVerdicts.length > 150) { recentVerdicts.shift(); judgedFrames.shift(); }
@@ -185,11 +189,17 @@ detector.onVerifier = (v) => {
   // The verifier's opinion also counts: when the local classifier is unsure (small, blurry press) the
   // cloud verdicts carry the state machine at cloud speed; when both see it, they must agree.
   session.onVerdict({ verdict: v.verdict, frame_ts: v.frame.recv_ts, latency_ms: v.latency_ms, model: v.model, seq: v.frame.header.seq, motion, box_area: v.seen_area });
+  runlog.verdict({ at: v.frame.recv_ts, latency_ms: Math.round(v.latency_ms), model: `${v.model} (verifier)`, phase: session.phase, lid: v.verdict.lid, press_visible: v.verdict.press_visible, confidence: v.verdict.confidence, hand: Boolean(v.verdict.hand_on_press), motion: +motion.toFixed(3), box_area: +(v.seen_area ?? 0).toFixed(3), why: session.blocked });
 };
 if (config.mode === 'local' && localAvailable()) { loadExtractor().then(() => log('info', 'local classifier ready (CLIP ViT-B/32)')).catch((e) => log('warn', `local classifier failed to load: ${(e as Error).message}`)); }
 let lastHint = '';
+let lastPhase: string = session.phase;
 session.onChange((snap, changed) => {
-  if (changed) { log('info', `phase → ${snap.phase}`); broadcastState(); }
+  if (changed) {
+    log('info', `phase → ${snap.phase}`); broadcastState();
+    runlog.phase(snap.run, lastPhase, snap.phase, Date.now(), snap.phase_since, snap.events[snap.events.length - 1]?.text ?? '');
+    lastPhase = snap.phase;
+  }
   else if (snap.hint !== lastHint) broadcastState(); // "Look at the press" etc. reach the HUD at once, not on the 500 ms beat
   lastHint = snap.hint;
 });
@@ -505,6 +515,7 @@ const server = http.createServer((req, res) => {
   }
   if (url.pathname === '/api/models') return send(200, JSON.stringify({ candidates: CANDIDATE_MODELS, bench: latestBench(), default_prompt: DEFAULT_PROMPT }));
   if (url.pathname === '/api/log') return send(200, JSON.stringify(logLines));
+  if (url.pathname === '/api/runs') return send(200, JSON.stringify(runlog.list())); // recorded runs, newest first
   if (url.pathname === '/api/verdicts') return send(200, JSON.stringify(recentVerdicts));
   if (url.pathname === '/api/retrain' && req.method === 'POST') {
     // Retrain the local classifier in the background with everything in data/live; the head hot-reloads.
@@ -680,4 +691,4 @@ server.listen(PORT, () => {
   console.log(`models: ${config.models.join(' + ')}   glasses ws: ws://<host>:${PORT}/ws/glasses`);
   if (!process.env.NO_BEACON) startBeacon(PORT); // NO_BEACON=1 for a test instance that the glasses must not discover
 });
-process.on('SIGINT', () => { stopReplaySource(); process.exit(0); });
+process.on('SIGINT', () => { stopReplaySource(); runlog.close(); process.exit(0); });
