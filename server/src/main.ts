@@ -14,6 +14,7 @@ import { decodeFrame, encodeFrame, type Frame } from './frames.ts';
 import { PressSession, DEFAULT_PARAMS, type SessionParams } from './session.ts';
 import { Detector } from './detector.ts';
 import { startReplay } from './replay.ts';
+import { keepUsbForward } from './usb.ts';
 import { startBeacon, lanAddresses } from './beacon.ts';
 import { CANDIDATE_MODELS, DEFAULT_PROMPT } from './vision.ts';
 import { Agent, newConversationIntent, transcribePcm16, type ChatMessage } from './agent.ts';
@@ -640,6 +641,7 @@ wss.on('connection', (ws, req) => {
 });
 
 keepWarm(() => glassesClients.size > 0 || desktops.size > 0);
+keepUsbForward(PORT, () => glassesClients.size === 0, (t) => log('info', t)); // the cable path heals itself after a re-plug
 // ElevenLabs unloads idle library voices (measured: a cold voice takes 4-6 s to its first audio instead
 // of ~0.2 s). While someone is connected, keep the selected voice loaded with a 2-character request
 // every 3 minutes (~40 characters an hour of quota).

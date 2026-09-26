@@ -1,6 +1,9 @@
 package com.iteria.platepress
 
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.BatteryManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -117,9 +120,22 @@ class AppModel(context: Context) {
             pairingStatus("Connecting to your computer…")
             repeat(8) { if (reach(2500)) return pairedOk(); delay(500) }
         }
-        // Same network name is not enough: many office/mesh Wi-Fis isolate devices from each other.
-        pairingStatus("Your Wi-Fi is keeping the glasses and computer apart. Plug in the cable, or try another network.")
+        if (usbPlugged()) {
+            // The cable is in but localhost isn't forwarded yet: the computer re-applies `adb reverse` every few seconds.
+            pairingStatus("Cable connected. Waiting for the computer…")
+            repeat(6) { if (tryConnect(USB_HOST to code.port, 1500)) return pairedOk(); delay(500) }
+            pairingStatus("The cable is in, but Iteria on the computer can't be reached. Is the server running?")
+        } else {
+            // Same network name is not enough: many office/mesh Wi-Fis isolate devices from each other.
+            pairingStatus("Your Wi-Fi is keeping the glasses and computer apart. Plug in the cable, or try another network.")
+        }
         delay(5000); pairingStatus("")
+    }
+
+    /** True while the glasses are powered over USB, i.e. most likely cabled to the computer. */
+    private fun usbPlugged(): Boolean {
+        val i = app.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) ?: return false
+        return i.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) and BatteryManager.BATTERY_PLUGGED_USB != 0
     }
 
     private fun pairedOk() { pairingStatus(""); sounds.chime() }
